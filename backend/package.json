@@ -5,9 +5,9 @@
   "description": "PostureGuard Node.js/Express backend",
   "main": "src/app.js",
   "scripts": {
-    "dev": "node src/app.js",
-    "start": "node src/app.js",
-    "test": "node --test"
+    "dev": "node --env-file-if-exists=../.env src/app.js",
+    "start": "node --env-file-if-exists=../.env src/app.js",
+    "test": "node --env-file-if-exists=../.env --test"
   },
   "dependencies": {
     "express": "^4.21.2"

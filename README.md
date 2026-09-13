@@ -5,7 +5,7 @@ distraction through a webcam, records violations, and automatically uses a
 robotic arm to physically block the laptop screen until the user corrects
 their behavior.
 
-**Status:** Milestone M0.1 — monorepo scaffold + tooling only. No product
+**Status:** Milestone M0.2 — monorepo scaffold + shared configuration. No product
 functionality is implemented yet. See `docs/development-plan.md`.
 
 ## Repository layout
@@ -58,6 +58,35 @@ postureguard/
    pip install -e .
    python -m cv
    ```
+
+## Configuration
+
+All services read one shared set of environment variables. Defaults match
+`.env.example`, so the app runs without a `.env` file. Copy the template and
+edit to override; the backend and frontend load a root-level `.env` if present
+(the CV service reads environment variables directly — see below).
+
+| Variable               | Default                                   | Service(s)              |
+| ---------------------- | ----------------------------------------- | ----------------------- |
+| `HOST`                 | `127.0.0.1`                               | backend, web            |
+| `WEB_PORT`             | `5173`                                    | backend (reference), web |
+| `BACKEND_PORT`         | `4000`                                    | backend                 |
+| `MONGODB_URI`          | `mongodb://127.0.0.1:27017/postureguard`  | backend (future)        |
+| `MONGODB_HOST_PORT`    | `27017`                                   | docker-compose (docs)    |
+| `CAMERA_INDEX`         | `0`                                       | cv                      |
+| `ARDUINO_SERIAL_PORT`  | `/dev/ttyACM0`                            | cv / firmware (future)   |
+
+Loading it per service:
+
+```sh
+# Backend / Dashboard: automatic (.env is picked up from the repo root)
+cd backend && npm run dev
+
+# CV service: source the file first
+cd cv
+set -a; source ../.env; set +a
+python -m cv
+```
 
 ## Health checks
 
