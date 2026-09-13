@@ -1,4 +1,10 @@
-const { MongoClient } = require('mongodb');
+const {
+  MongoClient,
+  MongoNetworkError,
+  MongoNotConnectedError,
+  MongoServerSelectionError,
+  MongoTopologyClosedError,
+} = require('mongodb');
 const config = require('../config');
 
 class MongoDBUnavailableError extends Error {
@@ -7,6 +13,21 @@ class MongoDBUnavailableError extends Error {
     this.name = 'MongoDBUnavailableError';
     this.code = 'MONGO_UNAVAILABLE';
   }
+}
+
+function toMongoUnavailable(err) {
+  if (err instanceof MongoDBUnavailableError) {
+    return err;
+  }
+  if (
+    err instanceof MongoNetworkError ||
+    err instanceof MongoNotConnectedError ||
+    err instanceof MongoServerSelectionError ||
+    err instanceof MongoTopologyClosedError
+  ) {
+    return new MongoDBUnavailableError(`MongoDB request failed: ${err.message}`);
+  }
+  return err;
 }
 
 function extractDbName(uri) {
@@ -80,5 +101,6 @@ module.exports = {
   isConnected,
   ping,
   status,
+  toMongoUnavailable,
   MongoDBUnavailableError,
 };

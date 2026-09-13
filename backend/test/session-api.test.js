@@ -1,6 +1,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const request = require('supertest');
+const { MongoServerSelectionError } = require('mongodb');
 const { createApp } = require('../src/app');
 const {
   SessionNotFoundError,
@@ -130,4 +131,30 @@ test('session routes map MongoDBUnavailableError to 503', async () => {
 
   assert.equal(res.status, 503);
   assert.equal(res.body.error, 'MongoDB is not connected');
+});
+
+test('GET /api/sessions/active maps a live Mongo driver outage to 503', async () => {
+  const underlying = new MongoServerSelectionError('connect ECONNREFUSED 127.0.0.1:27017', {
+    error: new Error('connect ECONNREFUSED 127.0.0.1:27017'),
+  });
+  const downPersistence = {
+    async status() {
+      return { connected: false };
+    },
+    getDb() {
+      return {
+        collection() {
+          return {
+            async findOne() {
+              throw underlying;
+            },
+          };
+        },
+      };
+    },
+  };
+  const res = await request(createApp({ persistence: downPersistence })).get('/api/sessions/active');
+
+  assert.equal(res.status, 503);
+  assert.match(res.body.error, /^MongoDB request failed: connect ECONNREFUSED/);
 });

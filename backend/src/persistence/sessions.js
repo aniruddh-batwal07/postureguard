@@ -1,4 +1,4 @@
-const { MongoDBUnavailableError } = require('./mongo');
+const { MongoDBUnavailableError, toMongoUnavailable } = require('./mongo');
 
 function createSessionStore(persistence) {
   function collection() {
@@ -10,24 +10,40 @@ function createSessionStore(persistence) {
   }
 
   async function insert(session) {
-    await collection().insertOne(session);
-    return session;
+    try {
+      await collection().insertOne(session);
+      return session;
+    } catch (err) {
+      throw toMongoUnavailable(err);
+    }
   }
 
   async function findBySessionId(sessionId) {
-    return collection().findOne({ sessionId });
+    try {
+      return await collection().findOne({ sessionId });
+    } catch (err) {
+      throw toMongoUnavailable(err);
+    }
   }
 
   async function findActive() {
-    return collection().findOne({ state: { $ne: 'ended' } }, { sort: { createdAt: -1 } });
+    try {
+      return await collection().findOne({ state: { $ne: 'ended' } }, { sort: { createdAt: -1 } });
+    } catch (err) {
+      throw toMongoUnavailable(err);
+    }
   }
 
   async function updateState(sessionId, changes) {
-    return collection().findOneAndUpdate(
-      { sessionId },
-      { $set: changes },
-      { returnDocument: 'after' },
-    );
+    try {
+      return await collection().findOneAndUpdate(
+        { sessionId },
+        { $set: changes },
+        { returnDocument: 'after' },
+      );
+    } catch (err) {
+      throw toMongoUnavailable(err);
+    }
   }
 
   return { insert, findBySessionId, findActive, updateState };
