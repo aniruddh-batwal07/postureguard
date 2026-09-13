@@ -1,0 +1,15 @@
+{
+  "name": "postureguard-backend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "PostureGuard Node.js/Express backend",
+  "main": "src/app.js",
+  "scripts": {
+    "dev": "node src/app.js",
+    "start": "node src/app.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "express": "^4.21.2"
+  }
+}
