@@ -4,6 +4,7 @@
 - **Guiding rules:** vertical slices > whole-subsystem builds; software-only work is separated from hardware work (tagged **[SW]** / **[HW]**); the physical arm is introduced only in Phase 5; nothing depends on real hardware before it's needed.
 - **Scope note:** realistic for a student project. No new runtime technologies beyond what product-spec/architecture already establish. Test tooling is limited to what's natural per language (Vitest/RTL, pytest, supertest, mongodb-memory-server, simulated serial device).
 - **Infrastructure decision:** MongoDB is **not** installed on the host system. It runs as a Docker container managed by Docker Compose, started with `docker compose up -d`. The backend connects to it over `localhost` (port from config). All startup, setup, test, and demo instructions in this plan assume this containerized setup.
+- **Runtime and process placement:** the Node.js backend and MongoDB run inside **WSL Ubuntu**; the Python CV service runs **natively on the Windows host** (it needs direct webcam access and does not rely on WSL camera passthrough); the dashboard runs in the browser on Windows. Cross-process traffic is always over `localhost` via WSL2's built-in localhost forwarding. See `architecture.md` §1 and §3.
 
 ## Phase dependency order
 
@@ -42,20 +43,20 @@ Phases 1 and 2 can run in parallel after Phase 0; Phase 3 needs both. Phase 4 ne
 
 ## Phase 0 — Foundation and decisions **[SW]**
 
-**Prerequisites:** Node.js, Python, and Docker (with the `docker compose` plugin) installed; git repo created; `docs/` exists. MongoDB is **not** installed on the host — it runs as a Docker container (set up in M0.1).
+**Prerequisites:** Node.js and Docker (with the `docker compose` plugin) installed on the WSL Ubuntu side; Python installed on the Windows host (`cv/` is a native Windows process); git repo created; `docs/` exists. MongoDB is **not** installed on the host — it runs as a Docker container (set up in M0.1).
 
 **Milestones:**
 
 ### M0.1 — Monorepo scaffold + tooling
 - **Objective:** establish the repository layout from `architecture.md` §6 with runnable empty services, plus a Docker Compose setup for the containerized MongoDB.
 - **Files/modules:** repo root (`backend/`, `cv/`, `web/`, `firmware/`, `hardware/`, `docs/`), `docker-compose.yml` (MongoDB service: image, host port, named volume for data), `.env.example`, basic README, run scripts.
-- **Expected behavior:** MongoDB starts in a Docker container via `docker compose up -d` and is reachable on `localhost`; each service boots a trivial "hello" (healthcheck) on `localhost`; every process binds `127.0.0.1`.
-- **Tests/verification:** `docker compose up -d` brings MongoDB up and `docker compose ps` reports it healthy; each service's health endpoint returns 200; `npm run dev` / `python -m <module>` both start clean.
+- **Expected behavior:** MongoDB starts in a Docker container via `docker compose up -d` (inside WSL) and is reachable from the WSL backend on `localhost`; the Python service on Windows boots a trivial "hello" (healthcheck) on `localhost` and can reach the WSL backend over WSL2 localhost forwarding; every process binds `127.0.0.1`.
+- **Tests/verification:** `docker compose up -d` brings MongoDB up and `docker compose ps` reports it healthy; each service's health endpoint returns 200 (backend health hit from Windows resolves through WSL2 forwarding); `npm run dev` (WSL) / `python -m <module>` (Windows) both start clean.
 - **Blocking ADRs:** ADR-7 (auth default = none), ADR-10 (serving model).
 - **Definition of done:** clean scaffold, documented startup commands, `.env.example` created, MongoDB runnable as a container, nothing else implemented.
 
 ### M0.2 — Cross-cutting configuration
-- **Objective:** ports, Mongo URI, camera index, serial port placeholder all configurable via environment; Mongo URI defaults match the host port exposed by `docker-compose.yml`.
+- **Objective:** ports, Mongo URI, camera index, serial port placeholder all configurable via environment; Mongo URI defaults match the host port exposed by `docker-compose.yml`; the Python service's `backend_url` defaults to `http://127.0.0.1:PORT` (the WSL backend over localhost forwarding).
 - **Files/modules:** `.env.example`, service config modules.
 - **Expected behavior:** services read config from env with sensible defaults; no secrets committed.
 - **Tests/verification:** start services with alternate ports via env; config module unit tests.
@@ -107,18 +108,18 @@ Phases 1 and 2 can run in parallel after Phase 0; Phase 3 needs both. Phase 4 ne
 **Prerequisites:** Phase 0 bootstrapping; Phase 1 M1.2 (backend must already accept session events). Can run in parallel with Phase 1.
 
 ### M2.1 — CV service skeleton + events client
-- **Objective:** service captures webcam frames and can post events to the backend.
+- **Objective:** service runs **natively on the Windows host** with direct webcam access, captures frames, and can post events to the WSL backend over `localhost`.
 - **Files/modules:** `cv/src/camera/`, `events/`, config.
-- **Expected behavior:** on session start, frames are captured; `session_start`/`baseline_captured` events reach the backend.
-- **Tests/verification:** fake camera frames unit tests; contract test posting events to a mock backend.
+- **Expected behavior:** on Windows, the service opens the physical webcam (OpenCV); on session start, frames are captured; `session_start`/`baseline_captured` events reach the WSL backend over `localhost` (WSL2 forwarding).
+- **Tests/verification:** fake camera frames unit tests (run on Windows); contract test posting events to a mock backend (verifies `localhost` event path).
 - **Blocking ADRs:** none.
-- **Definition of done:** the service can run, capture, and emit events.
+- **Definition of done:** the service runs on the Windows host, captures webcam frames, and can emit events to the backend over `localhost`.
 
 ### M2.2 — Pose detection + baseline capture
 - **Objective:** MediaPipe Pose works and produces a per-session upright-pose baseline (FR-02, FR-05).
 - **Files/modules:** `cv/src/pose/`.
 - **Expected behavior:** after ~2–3 s of upright posture, a baseline is computed and a `baseline_captured` event emitted with deviation measurements.
-- **Tests/verification:** synthetic landmark fixtures; real-camera spot-check.
+- **Tests/verification:** synthetic landmark fixtures; real-camera spot-check on the Windows host.
 - **Blocking ADRs:** none.
 - **Definition of done:** baseline capture is accurate enough to detect a clear slouch in practice.
 
@@ -183,7 +184,7 @@ Phases 1 and 2 can run in parallel after Phase 0; Phase 3 needs both. Phase 4 ne
 - **Definition of done:** mock-arm BLOCK/RETRIEVE sequences fully tested.
 
 ### M4.2 — Full loop with mock arm (2nd vertical slice ✅)
-- **Objective:** real webcam → real detection → mock arm blocks → correction unblocks.
+- **Objective:** real webcam (Windows host) → real detection → mock arm blocks → correction unblocks.
 - **Files/modules:** `web` blocking-status UI (FR-22), backend session FSM, cv events.
 - **Expected behavior:** a real slouch in front of the webcam shows card-at-screen status in the dashboard; correcting posture clears it.
 - **Tests/verification:** end-to-end scripted test using mock arm; demo walkthrough.
@@ -246,7 +247,7 @@ Phases 1 and 2 can run in parallel after Phase 0; Phase 3 needs both. Phase 4 ne
 - **Objective:** final acceptance + a rehearsed live demo.
 - **Files/modules:** `docs/` demo checklist, `hardware/` pre-flight notes.
 - **Expected behavior:** scripted scenario works every time: start session → sit upright (baseline) → slouch (real arm blocks) → correct (arm unblocks) → end session.
-- **Tests/verification:** full end-to-end acceptance run; pre-flight checklist (camera ready, serial connected, MongoDB container running via `docker compose up -d`); dry-run rehearsal.
+- **Tests/verification:** full end-to-end acceptance run; pre-flight checklist (camera ready on Windows, serial connected from WSL, MongoDB container running via `docker compose up -d`); dry-run rehearsal.
 - **Blocking ADRs:** none.
 - **Definition of done:** the complete PostureGuard flow — detection → violation → physical blocking → correction → unblocking, with persisted history and dashboard statistics — is demonstrated successfully.
 

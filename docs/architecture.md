@@ -10,19 +10,29 @@
 
 ## 1. High-Level System Architecture
 
-PostureGuard is fully **local**, running on a single laptop. It is built from
-three cooperating processes plus an embedded controller:
+PostureGuard is fully **local**, running on a single laptop across two runtime
+environments. The **Python CV service is a native Windows-host process** (it
+needs direct webcam access and does not rely on WSL camera passthrough); the
+**Node.js backend and MongoDB run inside WSL Ubuntu**. It is built from three
+cooperating processes plus an embedded controller:
 
 ```
                         ┌─────────────────────────────┐
-                        │      Laptop (single host)     │
+                        │         Windows host         │
                         │                              │
   ┌──────────────┐      │  ┌────────────────────────┐  │
   │   Webcam     │────▶│  │  Python CV Service     │  │
-  │  (hardware)  │      │  │  (pose + phone detect)│  │
+  │  (hardware)  │      │  │  (webcam, pose, phone) │  │
   └──────────────┘      │  └───────────┬────────────┘  │
                         │              │  HTTP events  │
-                        │              ▼              │
+                        │              │  (localhost)  │
+                        └──────────────┬──────────────┘
+                                       │  WSL2 localhost
+                                       │  forwarding
+                                       ▼
+                        ┌─────────────────────────────┐
+                        │         WSL Ubuntu           │
+                        │                              │
                         │  ┌────────────────────────┐  │
                         │  │ Node.js + Express      │  │
                         │  │ Backend (state owner)  │  │
@@ -30,8 +40,9 @@ three cooperating processes plus an embedded controller:
                         │        │          │          │
                         │  ┌─────▼────┐  ┌──▼───────┐  │
                         │  │ MongoDB  │  │ Dashboard│  │
-                        │  │ (local)  │  │ React+Vite│ │
-                        │  └──────────┘  └──────────┘  │
+                        │  │ (Docker  │  │ React+Vite│ │
+                        │  │ compose) │  └──────────┘  │
+                        │  └──────────┘                │
                         └───────────────┬──────────────┘
                                         │  serial link
                                         ▼
@@ -47,9 +58,12 @@ three cooperating processes plus an embedded controller:
 ```
 
 ### Architectural style
-- **Local monolith over local network** — three long-running processes on one
-  host communicating over `localhost`, with the hardware attached via a serial
-  link. No cloud, no external services.
+- **Local monolith over two runtime environments** — the Python CV service is
+  a native **Windows-host** process (direct webcam access); the Node.js backend
+  and MongoDB run inside **WSL Ubuntu**; the dashboard runs in the browser on
+  Windows. All cross-process traffic uses `localhost` (WSL2 localhost
+  forwarding at the Windows → WSL boundary). Hardware attaches to WSL via a
+  serial link. No cloud, no external services.
 - **The Node.js backend is the single source of truth** for session state,
   event history, and hardware command sequencing.
 - **The Python CV service is a detection engine**: it runs the vision models,
@@ -68,6 +82,9 @@ three cooperating processes plus an embedded controller:
   §5/§7) and keeps each piece independently testable.
 - The hardware is encapsulated behind two commands, so the system can be
   demoed with a mocked arm when real hardware is unavailable.
+- The webcam-facing Python code runs on Windows because the webcam is attached
+  to (and only reliably addressable from) the Windows host; WSL's built-in
+  camera passthrough is not relied on for this project.
 
 ---
 
@@ -82,8 +99,12 @@ three cooperating processes plus an embedded controller:
 - Has **no** direct contact with the Python service, MongoDB, or the Arduino.
 - Serving model: Vite dev server during development; a static build served by
   the Express backend for the demo.
+- Runs in the browser on the Windows host and reaches the WSL backend over
+  `localhost` (WSL2 localhost forwarding).
 
 ### 2.2 Python computer vision service
+- Runs **natively on the Windows host** as a regular process, so OpenCV has
+  direct access to the physical webcam.
 - Captures the laptop webcam feed (spec FR-04).
 - Runs MediaPipe Pose for posture detection (FR-05) and YOLOv8 Nano +
   MediaPipe Hands for phone-use detection (FR-06).
@@ -143,17 +164,19 @@ three cooperating processes plus an embedded controller:
 
 | # | From | To | Transport | Payload / Purpose |
 |---|---|---|---|---|
-| 1 | Webcam | Python CV | OS camera API | raw video frames (never leaves the host) |
-| 2 | Python CV | Backend | HTTP/JSON (`localhost`) | control + detection events |
-| 3 | Backend | MongoDB | MongoDB wire protocol (`localhost`) | persistence |
-| 4 | Backend | Dashboard | HTTP/JSON + state push `[ADR-1]` | API + live updates (FR-14) |
+| 1 | Webcam | Python CV | OS camera API (Windows host) | raw video frames (never leave the Windows host) |
+| 2 | Python CV (Windows) | Backend (WSL) | HTTP/JSON over `localhost` (WSL2 forwarding) | control + detection events |
+| 3 | Backend | MongoDB | MongoDB wire protocol (`localhost`, in WSL) | persistence |
+| 4 | Backend (WSL) | Dashboard (browser, Windows) | HTTP/JSON + state push `[ADR-1]` over `localhost` | API + live updates (FR-14) |
 | 5 | Backend | Arduino | serial link `[ADR-2]` | `BLOCK` / `RETRIEVE` / `STATUS` |
 | 6 | Arduino | Backend | serial link | `ACK` / `DONE` / `ERROR` / `STATE` |
 
 **Direct paths deliberately excluded:** dashboard ↔ Python, dashboard ↔
 MongoDB, Python ↔ Arduino, dashboard ↔ Arduino, Mongo ↔ Python. All
 cross-subsystem communication flows through the backend (except webcam → CV,
-which is purely local to the Python process).
+which is purely local to the Windows Python process). Cross-host traffic always
+crosses the WSL2 localhost boundary at `127.0.0.1`; nothing binds to a
+routable interface.
 
 ---
 
@@ -399,8 +422,11 @@ healthy serial link + acknowledged arm state.
 ## 10. Security and Local-System Considerations
 
 - **Bind everything to `127.0.0.1`** (Express, Mongo, Vite, Python HTTP
-  client). Nothing listens on a routable interface.
-- **Webcam frames never leave the Python process.** No video over the wire.
+  client). Nothing listens on a routable interface. Cross-host traffic relies
+  exclusively on WSL2's built-in localhost forwarding between the Windows host
+  and the WSL Ubuntu VM.
+- **Webcam frames never leave the Windows Python process.** No video over the
+  wire.
 - **CORS:** dashboard served from the Express origin or same-origin in
   production; in dev, CORS is restricted to `localhost` origins.
 - **No authentication** for a single-user local app. Optional shared secret
@@ -410,8 +436,9 @@ healthy serial link + acknowledged arm state.
   database name; no default-internet credentials in code.
 - **No secrets in the repository.** Settings and ports come from a local
   `.env` (git-ignored); `.env.example` documents keys.
-- **Serial device permission:** the Arduino's serial port must be
-  discoverable; backend refuses to start the blocking subsystem if the port
+- **Serial device permission:** the Arduino's serial port must be discoverable
+  from within WSL (Windows-side USB serial is bound into the WSL Ubuntu
+  environment); backend refuses to start the blocking subsystem if the port
   is unavailable (fails safe).
 - **Strict validation on all inter-process payloads** (JSON schema level)
   because three independent services trust the wire.
@@ -423,7 +450,9 @@ healthy serial link + acknowledged arm state.
 ## 11. Testing Strategy (High Level)
 
 Unit / integration / demo; no test framework mandated (use the natural tool for
-each language; confirm in implementation).
+each language; confirm in implementation). Tests run in the runtime environment
+for each piece (Python CV code is exercised on the Windows host; backend and
+dashboard tests run in WSL Ubuntu).
 
 - **Python (`cv/`)**
   - Unit: debounce timer logic (FR-07–FR-09) with synthetic pose/phone
