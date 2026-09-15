@@ -3,8 +3,11 @@ const config = require('./config');
 const mongo = require('./persistence/mongo');
 const createStatusRouter = require('./routes/status');
 const { createSessionStore } = require('./persistence/sessions');
+const { createEventStore } = require('./persistence/events');
 const { createSessionService } = require('./sessions/service');
+const { createEventService } = require('./events/service');
 const createSessionsRouter = require('./routes/sessions');
+const createEventsRouter = require('./routes/events');
 
 function errorToResponse(err) {
   switch (err.code) {
@@ -12,6 +15,7 @@ function errorToResponse(err) {
       return { status: 404, body: { error: err.message } };
     case 'ACTIVE_SESSION_EXISTS':
     case 'INVALID_TRANSITION':
+    case 'SESSION_NOT_ACTIVE':
       return { status: 409, body: { error: err.message } };
     case 'MONGO_UNAVAILABLE':
       return { status: 503, body: { error: err.message } };
@@ -20,21 +24,29 @@ function errorToResponse(err) {
   }
 }
 
-function createApp({ persistence = mongo, sessionService } = {}) {
+function createApp({ persistence = mongo, sessionService, eventService } = {}) {
   const store = createSessionStore(persistence);
   const sessions = sessionService || createSessionService({ store });
+  const events = eventService || createEventService({
+    store: createEventStore(persistence),
+    findSessionById: store.findBySessionId,
+  });
 
   const app = express();
 
   app.use(express.json());
   app.use('/api', createStatusRouter(persistence));
   app.use('/api', createSessionsRouter(sessions));
+  app.use('/api', createEventsRouter(events));
 
   app.use((_req, res) => {
     res.status(404).json({ error: 'Not Found' });
   });
 
   app.use((err, _req, res, _next) => {
+    if (err.type === 'entity.parse.failed' || err.status === 400) {
+      return res.status(400).json({ error: 'invalid JSON body' });
+    }
     const mapped = errorToResponse(err);
     if (mapped) {
       return res.status(mapped.status).json(mapped.body);

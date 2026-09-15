@@ -5,7 +5,7 @@ from cv.__main__ import resolve_active_session, run
 from cv.config import Config
 from cv.events import EventClient
 from cv.pose import BaselineCaptureError, PoseLandmarks
-from cv.rules import EVENT_SLOUCH_VIOLATION
+from cv.rules import EVENT_CORRECTION_REQUESTED, EVENT_SLOUCH_VIOLATION
 from mock_backend import MockBackend
 
 
@@ -49,7 +49,7 @@ class FailingDetector:
         return None
 
 
-def test_run_opens_camera_posts_initial_events_and_releases():
+def test_run_opens_camera_resolves_session_and_releases():
     backend = MockBackend()
     try:
         camera = FakeCamera()
@@ -58,8 +58,7 @@ def test_run_opens_camera_posts_initial_events_and_releases():
             max_frames=3, frame_delay=0, preview_enabled=False,
         )
         assert session_id == "session-1"
-        assert [e["type"] for e in backend.events] == ["session_start", "baseline_captured"]
-        assert all(e["sessionId"] == session_id for e in backend.events)
+        assert backend.events == []
         assert camera.open_calls == 1 and camera.released
         assert camera.read_count == 4
     finally:
@@ -92,7 +91,7 @@ def test_resolve_active_session_creates_when_none_exists():
         backend.close()
 
 
-def test_failed_pose_baseline_does_not_emit_baseline_event():
+def test_failed_pose_baseline_forwards_no_events():
     backend = MockBackend()
     try:
         camera = FakeCamera()
@@ -109,7 +108,7 @@ def test_failed_pose_baseline_does_not_emit_baseline_event():
                 baseline_max_seconds=0,
                 preview_enabled=False,
             )
-        assert [event["type"] for event in backend.events] == ["session_start"]
+        assert backend.events == []
         assert camera.released
         assert camera.open_calls == 1
     finally:
@@ -208,7 +207,7 @@ class FakeMonotonic:
         return self.t
 
 
-def test_run_loop_detects_sustained_slouch_and_prints_event(capsys):
+def test_run_loop_forwards_sustained_slouch_event(capsys):
     backend = MockBackend()
     try:
         camera = FakeCamera()
@@ -218,7 +217,7 @@ def test_run_loop_detects_sustained_slouch_and_prints_event(capsys):
             [_landmarks(_UPRIGHT), _landmarks(_SLOUCHED), _landmarks(_SLOUCHED), _landmarks(_SLOUCHED)]
         )
         clock = FakeMonotonic()
-        run(
+        session_id = run(
             Config(),
             client_for(backend),
             camera,
@@ -230,15 +229,16 @@ def test_run_loop_detects_sustained_slouch_and_prints_event(capsys):
             preview_enabled=False,
             time_fn=clock,
         )
-        # The rule event is printed but NOT forwarded to the backend.
-        output = capsys.readouterr().out
-        assert f"event: {EVENT_SLOUCH_VIOLATION}" in output
-        assert [e["type"] for e in backend.events] == ["session_start", "baseline_captured"]
+        # Exactly one slouch_violation is forwarded to the backend.
+        assert session_id == "session-1"
+        assert [e["type"] for e in backend.events] == [EVENT_SLOUCH_VIOLATION]
+        assert all(e["sessionId"] == "session-1" for e in backend.events)
+        assert f"event sent: {EVENT_SLOUCH_VIOLATION}" in capsys.readouterr().out
     finally:
         backend.close()
 
 
-def test_run_loop_does_not_print_violation_for_upright_posture(capsys):
+def test_run_loop_does_not_forward_violation_for_upright_posture(capsys):
     backend = MockBackend()
     try:
         camera = FakeCamera()
@@ -257,7 +257,71 @@ def test_run_loop_does_not_print_violation_for_upright_posture(capsys):
             preview_enabled=False,
             time_fn=FakeMonotonic(),
         )
+        assert backend.events == []
         output = capsys.readouterr().out
-        assert f"event: {EVENT_SLOUCH_VIOLATION}" not in output
+        assert f"event sent: {EVENT_SLOUCH_VIOLATION}" not in output
+    finally:
+        backend.close()
+
+
+def test_run_loop_forwards_correction_after_recovery():
+    backend = MockBackend()
+    try:
+        camera = FakeCamera()
+        # Baseline consumes one upright sample, then the loop sees slouch (2s,
+        # violation), then upright (2s, correction) back-to-back.
+        detector = SequenceDetector(
+            [
+                _landmarks(_UPRIGHT),
+                _landmarks(_SLOUCHED),
+                _landmarks(_SLOUCHED),
+                _landmarks(_SLOUCHED),
+                _landmarks(_UPRIGHT),
+                _landmarks(_UPRIGHT),
+            ]
+        )
+        run(
+            Config(),
+            client_for(backend),
+            camera,
+            max_frames=7,
+            frame_delay=0,
+            detector=detector,
+            baseline_min_samples=1,
+            baseline_max_seconds=1.0,
+            preview_enabled=False,
+            time_fn=FakeMonotonic(),
+        )
+        assert [e["type"] for e in backend.events] == [
+            EVENT_SLOUCH_VIOLATION,
+            EVENT_CORRECTION_REQUESTED,
+        ]
+    finally:
+        backend.close()
+
+
+def test_run_loop_survives_forwarding_failure(capsys):
+    backend = MockBackend()
+    backend.events_status = 500
+    try:
+        camera = FakeCamera()
+        detector = SequenceDetector(
+            [_landmarks(_UPRIGHT), _landmarks(_SLOUCHED), _landmarks(_SLOUCHED), _landmarks(_SLOUCHED)]
+        )
+        session_id = run(
+            Config(),
+            client_for(backend),
+            camera,
+            max_frames=5,
+            frame_delay=0,
+            detector=detector,
+            baseline_min_samples=1,
+            baseline_max_seconds=1.0,
+            preview_enabled=False,
+            time_fn=FakeMonotonic(),
+        )
+        assert session_id == "session-1"
+        assert camera.released
+        assert "failed to forward event 'slouch_violation'" in capsys.readouterr().err
     finally:
         backend.close()

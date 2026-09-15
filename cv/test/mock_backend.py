@@ -11,7 +11,7 @@ class MockBackend:
         self.events = []
         self.active_session = None
         self.session_counter = 0
-        self.events_status = 200
+        self.events_status = 201
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), self._make_handler())
         self.base_url = f"http://127.0.0.1:{self._server.server_address[1]}"
         thread = Thread(target=self._server.serve_forever, daemon=True)
@@ -30,7 +30,14 @@ class MockBackend:
             }
             return 201, {"session": self.active_session}
         if (method, path) == ("POST", "/api/events"):
-            return self.events_status, {"accepted": True, "eventId": len(self.events)}
+            payload = self.events[-1] if self.events else {}
+            event = {
+                "id": f"ev-{len(self.events)}",
+                "sessionId": payload.get("sessionId"),
+                "type": payload.get("type"),
+                "timestamp": payload.get("timestamp"),
+            }
+            return self.events_status, {"event": event}
         return 404, {"error": "Not Found"}
 
     def _make_handler(self):

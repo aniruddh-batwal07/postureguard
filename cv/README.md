@@ -46,7 +46,7 @@ reliably from a UNC path. Point uv at that venv with `UV_PROJECT_ENVIRONMENT`
 # from the Windows host (PowerShell):
 $env:UV_PROJECT_ENVIRONMENT = "C:\Users\<you>\.venvs\postureguard-cv"
 uv sync                                  # create/refresh the Windows venv
-uv run python -m cv      # open camera, post session_start/baseline_captured, capture until Ctrl+C
+uv run python -m cv      # open camera, resolve a session, forward rule events until Ctrl+C
 uv run pytest            # run the tests (fake camera + mock backend)
 ```
 
@@ -69,12 +69,19 @@ During baseline calibration the service prints progress lines such as
 preview window showing the camera feed with detected landmarks. Disable the
 window with `python -m cv --no-preview`.
 
-Once monitoring starts, sustained conditions are reported on stdout:
+Once monitoring starts, sustained conditions are forwarded to the backend over
+`POST /api/events`; each successful forward is reported on stdout:
 
 ```
-[cv] event: slouch_violation
-[cv] event: correction_requested
+[cv] event sent: slouch_violation
+[cv] event sent: correction_requested
 ```
+
+The backend accepts only these two event types (`slouch_violation`,
+`correction_requested`) for an active session. If the backend is unreachable or
+returns an error, the forward is logged to stderr
+(`[cv] failed to forward event ...`) and the capture loop continues — the event
+is dropped rather than queued or retried (M3.1).
 
 The rule parameters come from the shared settings (`.env.example`):
 
