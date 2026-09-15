@@ -33,6 +33,7 @@ function event(overrides = {}) {
 function fakeEventService(overrides = {}) {
   return {
     recordEvent: overrides.recordEvent || (async () => event()),
+    listEvents: overrides.listEvents || (async () => []),
   };
 }
 
@@ -172,4 +173,70 @@ test('POST /api/events maps a live Mongo driver outage to 503', async () => {
 
   assert.equal(res.status, 503);
   assert.match(res.body.error, /^MongoDB request failed: connect ECONNREFUSED/);
+});
+
+test('GET /api/events returns the events for a session', async () => {
+  const events = [
+    event({ type: 'slouch_violation' }),
+    event({ type: 'correction_requested', eventId: 'c8c1f3a0-0000-4000-8000-000000000002' }),
+  ];
+  const res = await request(app({ listEvents: async () => events }))
+    .get(`/api/events?sessionId=${SESSION_UUID}`);
+
+  assert.equal(res.status, 200);
+  assert.equal(res.body.events.length, 2);
+  assert.equal(res.body.events[0].id, 'c8c1f3a0-0000-4000-8000-000000000001');
+  assert.equal(res.body.events[1].type, 'correction_requested');
+  assert.match(res.body.events[0].timestamp, /2026-03-01T10:00:00/);
+});
+
+test('GET /api/events returns an empty list when the session has no events', async () => {
+  const res = await request(app({ listEvents: async () => [] }))
+    .get(`/api/events?sessionId=${SESSION_UUID}`);
+
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body, { events: [] });
+});
+
+test('GET /api/events rejects a missing sessionId with 400', async () => {
+  const res = await request(app()).get('/api/events');
+
+  assert.equal(res.status, 400);
+  assert.match(res.body.error, /sessionId/);
+});
+
+test('GET /api/events rejects a malformed sessionId with 400', async () => {
+  const res = await request(app()).get('/api/events?sessionId=not-a-uuid');
+
+  assert.equal(res.status, 400);
+  assert.match(res.body.error, /sessionId/);
+});
+
+test('GET /api/events rejects an invalid limit with 400', async () => {
+  const res = await request(app()).get(`/api/events?sessionId=${SESSION_UUID}&limit=abc`);
+
+  assert.equal(res.status, 400);
+  assert.match(res.body.error, /limit/);
+});
+
+test('GET /api/events maps SessionNotFoundError to 404', async () => {
+  const res = await request(app({
+    listEvents: async () => {
+      throw new SessionNotFoundError('session nope not found');
+    },
+  })).get(`/api/events?sessionId=${SESSION_UUID}`);
+
+  assert.equal(res.status, 404);
+  assert.equal(res.body.error, 'session nope not found');
+});
+
+test('GET /api/events maps MongoDBUnavailableError to 503', async () => {
+  const res = await request(app({
+    listEvents: async () => {
+      throw new MongoDBUnavailableError('MongoDB is not connected; cannot persist events');
+    },
+  })).get(`/api/events?sessionId=${SESSION_UUID}`);
+
+  assert.equal(res.status, 503);
+  assert.equal(res.body.error, 'MongoDB is not connected; cannot persist events');
 });

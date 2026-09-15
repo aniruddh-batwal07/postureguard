@@ -32,7 +32,15 @@ function createEventService({ store, findSessionById, now = () => new Date() }) 
     return store.insert(event);
   }
 
-  return { recordEvent };
+  async function listEvents(sessionId, { limit = 100 } = {}) {
+    const session = await findSessionById(sessionId);
+    if (!session) {
+      throw new SessionNotFoundError(`session ${sessionId} not found`);
+    }
+    return store.listBySession(sessionId, { limit });
+  }
+
+  return { recordEvent, listEvents };
 }
 
 module.exports = { createEventService, SessionNotActiveError };

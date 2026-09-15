@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
 import * as sessionApi from '../api/sessions';
 
-export function useSession(api = sessionApi) {
+function defaultPollIntervalMs() {
+  return Number(import.meta.env.VITE_SESSION_POLL_INTERVAL_MS) || 5000;
+}
+
+export function useSession(api = sessionApi, { pollIntervalMs = defaultPollIntervalMs() } = {}) {
   const [session, setSession] = useState(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -22,6 +26,14 @@ export function useSession(api = sessionApi) {
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    if (pollIntervalMs <= 0) {
+      return undefined;
+    }
+    const id = setInterval(() => refresh(), pollIntervalMs);
+    return () => clearInterval(id);
+  }, [refresh, pollIntervalMs]);
 
   const startSession = useCallback(async () => {
     setBusy(true);

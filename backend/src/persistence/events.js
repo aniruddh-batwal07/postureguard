@@ -18,7 +18,20 @@ function createEventStore(persistence) {
     }
   }
 
-  return { insert };
+  async function listBySession(sessionId, { limit = 100 } = {}) {
+    try {
+      const docs = await collection()
+        .find({ sessionId })
+        .sort({ createdAt: -1, timestamp: -1 })
+        .limit(limit)
+        .toArray();
+      return docs.reverse();
+    } catch (err) {
+      throw toMongoUnavailable(err);
+    }
+  }
+
+  return { insert, listBySession };
 }
 
 module.exports = { createEventStore };

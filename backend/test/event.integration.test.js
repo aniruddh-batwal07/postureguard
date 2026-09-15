@@ -139,3 +139,70 @@ test('POST /api/events never creates a session implicitly', async (t) => {
   const created = await sessionsCollection().findOne({ sessionId });
   assert.equal(created, null, 'event must not create a session');
 });
+
+test('GET /api/events returns the persisted events for an active session', async (t) => {
+  if (!connected) return t.skip(`MongoDB unavailable at ${TEST_URI}`);
+
+  const sessionId = await seedSession({ state: 'monitoring' });
+  await request(testApp()).post('/api/events').send(validEvent(sessionId, { type: 'slouch_violation' }));
+  await request(testApp()).post('/api/events').send(validEvent(sessionId, {
+    type: 'correction_requested',
+    timestamp: '2026-03-01T10:00:05.000Z',
+    data: { reason: 'head_drop' },
+  }));
+
+  const res = await request(testApp()).get(`/api/events?sessionId=${sessionId}`);
+  assert.equal(res.status, 200);
+  assert.equal(res.body.events.length, 2);
+  assert.deepEqual(res.body.events.map((event) => event.type), ['slouch_violation', 'correction_requested']);
+  assert.equal(res.body.events[0].sessionId, sessionId);
+  assert.ok(res.body.events[0].id, 'event has an id');
+  assert.match(res.body.events[0].timestamp, /2026-03-01T10:00:00/);
+  assert.deepEqual(res.body.events[1].data, { reason: 'head_drop' });
+});
+
+test('GET /api/events is scoped to the requested session', async (t) => {
+  if (!connected) return t.skip(`MongoDB unavailable at ${TEST_URI}`);
+
+  const first = await seedSession({ state: 'monitoring' });
+  const second = await seedSession({ state: 'monitoring' });
+  await request(testApp()).post('/api/events').send(validEvent(first));
+  await request(testApp()).post('/api/events').send(validEvent(second, { type: 'correction_requested' }));
+
+  const res = await request(testApp()).get(`/api/events?sessionId=${first}`);
+  assert.equal(res.status, 200);
+  assert.equal(res.body.events.length, 1);
+  assert.equal(res.body.events[0].sessionId, first);
+  assert.equal(res.body.events[0].type, 'slouch_violation');
+});
+
+test('GET /api/events returns an empty history for a session with no events', async (t) => {
+  if (!connected) return t.skip(`MongoDB unavailable at ${TEST_URI}`);
+
+  const sessionId = await seedSession({ state: 'baseline_capturing' });
+
+  const res = await request(testApp()).get(`/api/events?sessionId=${sessionId}`);
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body, { events: [] });
+});
+
+test('GET /api/events returns 404 for an unknown session', async (t) => {
+  if (!connected) return t.skip(`MongoDB unavailable at ${TEST_URI}`);
+
+  const res = await request(testApp()).get(`/api/events?sessionId=${randomUUID()}`);
+  assert.equal(res.status, 404);
+  assert.match(res.body.error, /not found/);
+});
+
+test('GET /api/events returns events for an ended session (history stays viewable)', async (t) => {
+  if (!connected) return t.skip(`MongoDB unavailable at ${TEST_URI}`);
+
+  const sessionId = await seedSession({ state: 'ended' });
+  await request(testApp()).post('/api/events').send(validEvent(sessionId)).catch(() => {});
+
+  const otherSessionId = await seedSession({ state: 'ended' });
+
+  const res = await request(testApp()).get(`/api/events?sessionId=${otherSessionId}`);
+  assert.equal(res.status, 200);
+  assert.equal(res.body.events.length, 0);
+});

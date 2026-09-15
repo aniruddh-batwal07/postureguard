@@ -2,11 +2,16 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import App from '../src/App';
 import * as api from '../src/api/sessions';
+import * as eventsApi from '../src/api/events';
 
 vi.mock('../src/api/sessions', () => ({
   getActiveSession: vi.fn(),
   createSession: vi.fn(),
   endSession: vi.fn(),
+}));
+
+vi.mock('../src/api/events', () => ({
+  getEvents: vi.fn(),
 }));
 
 const SESSION_ID = 'a2f4c3b1-1111-4222-8333-444455556666';
@@ -22,8 +27,25 @@ function session(overrides = {}) {
   };
 }
 
+function event(overrides = {}) {
+  return {
+    id: 'e2e1f0d0-0000-4000-8000-000000000001',
+    sessionId: SESSION_ID,
+    type: 'slouch_violation',
+    timestamp: '2026-09-13T10:05:00.000Z',
+    ...overrides,
+  };
+}
+
 beforeEach(() => {
   vi.resetAllMocks();
+  eventsApi.getEvents.mockResolvedValue([]);
+  // Keep the session-state poll from firing during count-sensitive tests.
+  vi.stubEnv('VITE_SESSION_POLL_INTERVAL_MS', '60000');
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 describe('App session dashboard', () => {
@@ -137,5 +159,120 @@ describe('App session dashboard', () => {
 
     expect(screen.getByText('Yes')).toBeInTheDocument();
     expect(screen.getByText('monitoring')).toBeInTheDocument();
+  });
+});
+
+describe('App session states', () => {
+  it('renders each backend session state with a clear label', async () => {
+    const cases = {
+      idle: 'No session active',
+      baseline_capturing: 'Capturing posture baseline',
+      monitoring: 'Monitoring posture',
+      blocked: 'Screen blocked — fix your posture',
+      ending: 'Ending session',
+      ended: 'Session ended',
+    };
+
+    for (const [state, label] of Object.entries(cases)) {
+      api.getActiveSession.mockResolvedValue(
+        state === 'idle' ? null : session({ state }),
+      );
+      const { unmount } = render(<App />);
+
+      await waitFor(() => expect(screen.getByText(state)).toBeInTheDocument());
+      expect(screen.getByText(new RegExp(label))).toBeInTheDocument();
+
+      unmount();
+    }
+  });
+
+  it('polls for session state changes', async () => {
+    vi.stubEnv('VITE_SESSION_POLL_INTERVAL_MS', '60');
+    api.getActiveSession.mockResolvedValue(null);
+    render(<App />);
+
+    await waitFor(() => expect(api.getActiveSession).toHaveBeenCalledTimes(1));
+    await waitFor(
+      () => expect(api.getActiveSession.mock.calls.length).toBeGreaterThanOrEqual(2),
+      { timeout: 4000 },
+    );
+  });
+});
+
+describe('App live events', () => {
+  it('shows a slouch_violation event from the active session', async () => {
+    api.getActiveSession.mockResolvedValue(session({ state: 'monitoring' }));
+    eventsApi.getEvents.mockResolvedValue([event({ type: 'slouch_violation' })]);
+    render(<App />);
+
+    await waitFor(() =>
+      expect(screen.getByText('Posture violation detected')).toBeInTheDocument(),
+    );
+    expect(eventsApi.getEvents).toHaveBeenCalledWith(SESSION_ID);
+  });
+
+  it('shows a correction_requested event from the active session', async () => {
+    api.getActiveSession.mockResolvedValue(session({ state: 'monitoring' }));
+    eventsApi.getEvents.mockResolvedValue([event({ type: 'correction_requested' })]);
+    render(<App />);
+
+    await waitFor(() =>
+      expect(screen.getByText('Posture correction requested')).toBeInTheDocument(),
+    );
+  });
+
+  it('shows both violation and correction events in order', async () => {
+    api.getActiveSession.mockResolvedValue(session({ state: 'monitoring' }));
+    eventsApi.getEvents.mockResolvedValue([
+      event({
+        id: 'e2e1f0d0-0000-4000-8000-000000000001',
+        type: 'slouch_violation',
+        timestamp: '2026-09-13T10:05:00.000Z',
+      }),
+      event({
+        id: 'e2e1f0d0-0000-4000-8000-000000000002',
+        type: 'correction_requested',
+        timestamp: '2026-09-13T10:08:00.000Z',
+      }),
+    ]);
+    render(<App />);
+
+    await waitFor(() =>
+      expect(screen.getByText('Posture violation detected')).toBeInTheDocument(),
+    );
+    expect(screen.getByText('Posture correction requested')).toBeInTheDocument();
+  });
+
+  it('polls for new events on the configured interval', async () => {
+    vi.stubEnv('VITE_EVENT_POLL_INTERVAL_MS', '60');
+    api.getActiveSession.mockResolvedValue(session({ state: 'monitoring' }));
+    eventsApi.getEvents.mockResolvedValue([]);
+    render(<App />);
+
+    await waitFor(() => expect(eventsApi.getEvents).toHaveBeenCalledTimes(1));
+    await waitFor(
+      () => expect(eventsApi.getEvents.mock.calls.length).toBeGreaterThanOrEqual(2),
+      { timeout: 4000 },
+    );
+  });
+
+  it('shows a loading state while events are being fetched', async () => {
+    api.getActiveSession.mockResolvedValue(session({ state: 'monitoring' }));
+    eventsApi.getEvents.mockImplementation(() => new Promise(() => {}));
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByText('Loading events…')).toBeInTheDocument());
+  });
+
+  it('shows an error when loading events fails', async () => {
+    api.getActiveSession.mockResolvedValue(session({ state: 'monitoring' }));
+    eventsApi.getEvents.mockRejectedValue(new Error('MongoDB is not connected'));
+    render(<App />);
+
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        'Events error: MongoDB is not connected',
+      ),
+    );
   });
 });
