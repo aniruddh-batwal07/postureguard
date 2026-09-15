@@ -20,6 +20,10 @@ class Config:
     camera_index: int = 0
     serial_port: str = "/dev/ttyACM0"
 
+    @property
+    def backend_url(self) -> str:
+        return f"http://{self.host}:{self.backend_port}"
+
     @classmethod
     def from_env(cls) -> "Config":
         return cls(

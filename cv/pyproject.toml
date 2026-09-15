@@ -7,6 +7,21 @@ name = "postureguard-cv"
 version = "0.1.0"
 description = "PostureGuard Python computer vision service"
 requires-python = ">=3.10"
+dependencies = [
+    "opencv-python>=4.10",
+    "mediapipe>=0.10.14",
+    "numpy>=1.26",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+markers = [
+    "smoke: requires a real Windows webcam and MediaPipe model",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+]
