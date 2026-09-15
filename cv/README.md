@@ -5,13 +5,18 @@ the Windows host** so it has direct access to the physical webcam; it talks to
 the Node.js/Express backend (running in WSL Ubuntu) over `localhost` (WSL2
 localhost forwarding). See `docs/architecture.md` §1 and §3.
 
-**Status:** Milestone M2.2 — service skeleton, camera capture, MediaPipe Pose
-landmarks, structured posture measurements, and per-session baseline capture are
-implemented. A valid posture sample requires only the upper-body landmarks that
-are reliably visible on a laptop webcam — **nose + left/right shoulder**; the
-hips are NOT required (they are often below the camera frame). YOLOv8 Nano +
-MediaPipe Hands and debounce rules are later Phase 2 milestones; they are
-intentionally not part of M2.2.
+**Status:** Milestone M2.3 — service skeleton, camera capture, MediaPipe Pose
+landmarks, structured posture measurements, per-session baseline capture, and a
+**sustained-condition slouch/debounce rule** are implemented. A valid posture
+sample requires only the upper-body landmarks that are reliably visible on a
+laptop webcam — **nose + left/right shoulder**; the hips are NOT required (they
+are often below the camera frame). After calibration, live measurements are
+compared against the session baseline; a deviation beyond
+`CV_SLOUCH_THRESHOLD` sustained for `CV_SLOUCH_DURATION_SECONDS` emits
+`slouch_violation`, and returning within range for
+`CV_CORRECTION_DURATION_SECONDS` emits `correction_requested`. Events are
+currently printed by the service; forwarding them to the backend is a later
+Phase 3 milestone. YOLOv8 Nano + MediaPipe Hands remain Phase 2.4.
 
 Modules (from architecture §6):
 
@@ -21,7 +26,10 @@ Modules (from architecture §6):
 - `debug/` — development-only webcam preview with landmark overlay (separate
   from the production dashboard)
 - `phone/` — YOLOv8 Nano + MediaPipe Hands (Phase 2.4)
-- `rules/` — debounce/timer violations (Phase 2.3)
+- `rules/` — debounce/timer violations (Phase 2.3): `SlouchRule`, a pure,
+  deterministic state machine (inject timestamps; no camera/MediaPipe/backend
+  imports) that turns a measurement stream into `slouch_violation` /
+  `correction_requested` events after the configured sustained durations
 - `events/` — HTTP client to backend
 
 ## Development
@@ -60,3 +68,25 @@ During baseline calibration the service prints progress lines such as
 `[cv] Baseline: 7/30 valid samples` and (by default) opens a development-only
 preview window showing the camera feed with detected landmarks. Disable the
 window with `python -m cv --no-preview`.
+
+Once monitoring starts, sustained conditions are reported on stdout:
+
+```
+[cv] event: slouch_violation
+[cv] event: correction_requested
+```
+
+The rule parameters come from the shared settings (`.env.example`):
+
+| Env var                       | Default | Meaning                                            |
+| ----------------------------- | ------- | -------------------------------------------------- |
+| `CV_SLOUCH_THRESHOLD`         | 0.15    | deviation magnitude that counts as slouched        |
+| `CV_SLOUCH_DURATION_SECONDS`  | 2.0     | sustained slouch before the violation fires        |
+| `CV_CORRECTION_DURATION_SECONDS` | 2.0  | sustained recovery before the correction fires     |
+
+The manual real-camera demonstration asks the operator to slouch and then
+return upright, verifying both events fire after their sustained durations:
+
+```sh
+uv run pytest test/test_smoke_rules.py -m smoke -v -s
+```

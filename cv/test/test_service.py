@@ -4,7 +4,8 @@ import pytest
 from cv.__main__ import resolve_active_session, run
 from cv.config import Config
 from cv.events import EventClient
-from cv.pose import BaselineCaptureError
+from cv.pose import BaselineCaptureError, PoseLandmarks
+from cv.rules import EVENT_SLOUCH_VIOLATION
 from mock_backend import MockBackend
 
 
@@ -150,5 +151,113 @@ def test_run_releases_camera_when_detector_initialization_fails():
         with pytest.raises(RuntimeError, match="model missing"):
             run(Config(), client_for(backend), camera, max_frames=1, detector=BrokenDetector(), preview_enabled=False)
         assert camera.released
+    finally:
+        backend.close()
+
+
+# ── M2.3: slouch-rule wiring in the monitoring loop ──────────────────────────
+
+
+# Upright upper-body landmark set (identical posture) and a slouched one
+# (head pushed forward/down), both finite and above the unit visibility bar.
+_UPRIGHT = {
+    "NOSE": (0.5, 0.30, 0.0),
+    "LEFT_SHOULDER": (0.38, 0.45, 0.0),
+    "RIGHT_SHOULDER": (0.60, 0.45, 0.0),
+}
+_SLOUCHED = {
+    "NOSE": (0.55, 0.55, 0.0),
+    "LEFT_SHOULDER": (0.38, 0.45, 0.0),
+    "RIGHT_SHOULDER": (0.60, 0.45, 0.0),
+}
+_VISIBILITY = {name: 0.9 for name in ("NOSE", "LEFT_SHOULDER", "RIGHT_SHOULDER")}
+
+
+def _landmarks(lm: dict[str, tuple[float, float, float]]) -> PoseLandmarks:
+    return PoseLandmarks(landmarks=lm, visibility=_VISIBILITY, image_width=16, image_height=16)
+
+
+class SequenceDetector:
+    """Returns one landmark result per call, cycling through ``results``."""
+
+    def __init__(self, results):
+        self.results = results
+        self.calls = 0
+        self.closed = False
+
+    def initialize(self):
+        return None
+
+    def detect(self, frame):
+        result = self.results[self.calls % len(self.results)]
+        self.calls += 1
+        return result
+
+    def close(self):
+        self.closed = True
+
+
+class FakeMonotonic:
+    """Returns 1, 2, 3, ... on successive calls (one per monitoring frame)."""
+
+    def __init__(self):
+        self.t = 0.0
+
+    def __call__(self):
+        self.t += 1.0
+        return self.t
+
+
+def test_run_loop_detects_sustained_slouch_and_prints_event(capsys):
+    backend = MockBackend()
+    try:
+        camera = FakeCamera()
+        # Baseline consumes the first (upright) landmark; the monitoring loop
+        # then sees the slouched posture for the following frames.
+        detector = SequenceDetector(
+            [_landmarks(_UPRIGHT), _landmarks(_SLOUCHED), _landmarks(_SLOUCHED), _landmarks(_SLOUCHED)]
+        )
+        clock = FakeMonotonic()
+        run(
+            Config(),
+            client_for(backend),
+            camera,
+            max_frames=5,
+            frame_delay=0,
+            detector=detector,
+            baseline_min_samples=1,
+            baseline_max_seconds=1.0,
+            preview_enabled=False,
+            time_fn=clock,
+        )
+        # The rule event is printed but NOT forwarded to the backend.
+        output = capsys.readouterr().out
+        assert f"event: {EVENT_SLOUCH_VIOLATION}" in output
+        assert [e["type"] for e in backend.events] == ["session_start", "baseline_captured"]
+    finally:
+        backend.close()
+
+
+def test_run_loop_does_not_print_violation_for_upright_posture(capsys):
+    backend = MockBackend()
+    try:
+        camera = FakeCamera()
+        detector = SequenceDetector(
+            [_landmarks(_UPRIGHT), _landmarks(_UPRIGHT), _landmarks(_UPRIGHT)]
+        )
+        run(
+            Config(),
+            client_for(backend),
+            camera,
+            max_frames=3,
+            frame_delay=0,
+            detector=detector,
+            baseline_min_samples=1,
+            baseline_max_seconds=1.0,
+            preview_enabled=False,
+            time_fn=FakeMonotonic(),
+        )
+        output = capsys.readouterr().out
+        assert f"event: {EVENT_SLOUCH_VIOLATION}" not in output
     finally:
         backend.close()

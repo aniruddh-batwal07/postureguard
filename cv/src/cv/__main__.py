@@ -1,4 +1,4 @@
-"""PostureGuard CV service entry point (M2.1: camera + events; M2.2: pose baseline)."""
+"""PostureGuard CV service entry point (M2.1: camera + events; M2.2: pose baseline; M2.3: slouch rules)."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import argparse
 import signal
 import sys
 import time
-from typing import Any
+from typing import Any, Callable
 
 from cv import __version__
 from cv.camera import Camera, CameraError
@@ -17,9 +17,12 @@ from cv.pose import (
     BaselineCaptureError,
     PoseDetectionError,
     PoseDetector,
+    PostureBaseline,
     baseline_capture_payload,
     capture_baseline,
+    extract_posture_measurement,
 )
+from cv.rules import SlouchRule
 
 
 class _StopRequested(Exception):
@@ -47,12 +50,15 @@ def capture_baseline_event(
     min_samples: int,
     max_seconds: float,
     preview: PreviewRenderer | None = None,
-) -> None:
-    """Capture the upright baseline and emit ``baseline_captured``.
+) -> PostureBaseline:
+    """Capture the upright baseline, emit ``baseline_captured``, return it.
 
     Computes the per-session baseline from live frames and posts the event with
     the baseline deviation measurements (M2.2). Never emits the event when the
     baseline cannot be captured — the caller sees the failure reason.
+
+    Returns:
+        PostureBaseline, so the caller can configure the M2.3 slouch rule.
     """
     try:
         baseline = capture_baseline(
@@ -73,6 +79,7 @@ def capture_baseline_event(
             f"shoulder_roll={baseline.shoulder_roll:.2f}",
             flush=True,
         )
+        return baseline
     except (BaselineCaptureError, CameraError) as err:
         print(f"[cv] baseline failed: {err}", file=sys.stderr, flush=True)
         raise
@@ -88,19 +95,27 @@ def run(
     baseline_min_samples: int = 30,
     baseline_max_seconds: float = 5.0,
     preview_enabled: bool = True,
+    time_fn: Callable[[], float] = time.monotonic,
 ) -> str:
     """Open the camera, post the initial events, and capture until stopped.
 
     When ``detector`` is provided, the ``baseline_captured`` event carries the
-    real upright-posture baseline (M2.2). Without a detector, a placeholder
-    ``baseline_captured`` is emitted (M2.1 behavior).
+    real upright-posture baseline (M2.2) and the session baseline feeds an M2.3
+    ``SlouchRule``: each monitoring frame updates the rule, and when a violation
+    or recovery has been sustained for its configured duration the event name is
+    printed. Metalwire to the backend (``/api/events``) is deferred to M3.1 —
+    this loop only prints.
 
     When ``preview_enabled`` is True, a development-only preview window shows
     the webcam feed with detected landmarks and calibration progress while the
     baseline is being captured.
+
+    ``time_fn`` provides the monotonic clock used by the slouch rule (injectable
+    for deterministic tests).
     """
     preview = PreviewRenderer() if preview_enabled else None
     session_id = ""
+    rule: SlouchRule | None = None
     try:
         try:
             camera.open()
@@ -117,7 +132,7 @@ def run(
 
         if detector is not None:
             detector.initialize()
-            capture_baseline_event(
+            baseline = capture_baseline_event(
                 client,
                 session_id,
                 camera,
@@ -126,13 +141,32 @@ def run(
                 baseline_max_seconds,
                 preview=preview,
             )
+            rule = SlouchRule(
+                baseline.to_measurement(),
+                slouch_threshold=config.slouch_threshold,
+                slouch_duration_seconds=config.slouch_duration_seconds,
+                correction_duration_seconds=config.correction_duration_seconds,
+            )
+            print(
+                f"[cv] monitoring: threshold={config.slouch_threshold:.2f}, "
+                f"slouch_duration={config.slouch_duration_seconds:.1f}s, "
+                f"correction_duration={config.correction_duration_seconds:.1f}s",
+                flush=True,
+            )
         else:
             client.send_event("baseline_captured", session_id)
             print(f"[cv] sent session_start + baseline_captured for session {session_id}", flush=True)
 
         frames = 0
         while max_frames is None or frames < max_frames:
-            camera.read()
+            frame = camera.read()
+            if rule is not None:
+                landmarks = detector.detect(frame)
+                measurement = (
+                    extract_posture_measurement(landmarks) if landmarks is not None else None
+                )
+                for event in rule.update(measurement, time_fn()):
+                    print(f"[cv] event: {event}", flush=True)
             frames += 1
             time.sleep(frame_delay)
     except _StopRequested:
@@ -147,7 +181,7 @@ def run(
 def main() -> int:
     parser = argparse.ArgumentParser(
         prog="postureguard-cv",
-        description="PostureGuard computer vision service (M2.2: pose baseline).",
+        description="PostureGuard computer vision service (M2.3: slouch rules).",
     )
     parser.add_argument(
         "--no-preview",
