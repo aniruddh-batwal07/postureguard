@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useSession } from './hooks/useSession';
 import { useSessionEvents } from './hooks/useSessionEvents';
 import { useSessionStatistics } from './hooks/useSessionStatistics';
+import { useSettings } from './hooks/useSettings';
 
 const STATE_LABELS = {
   idle: 'No session active',
@@ -63,6 +64,45 @@ export default function App() {
     loading: statisticsLoading,
     error: statisticsError,
   } = useSessionStatistics(statsSessionId);
+
+  const { settings, loading: settingsLoading, saving, error: settingsError, saveSettings } = useSettings();
+
+  // Local draft state for the settings form
+  const [draft, setDraft] = useState(null);
+  const [saveSuccess, setSaveSuccess] = useState(false);
+
+  // Initialise draft when settings load
+  useEffect(() => {
+    if (settings && draft === null) {
+      setDraft({
+        slouchThreshold: String(settings.slouchThreshold),
+        slouchDurationSeconds: String(settings.slouchDurationSeconds),
+        correctionDurationSeconds: String(settings.correctionDurationSeconds),
+      });
+    }
+  }, [settings, draft]);
+
+  function handleDraftChange(field, value) {
+    setDraft((prev) => ({ ...prev, [field]: value }));
+    setSaveSuccess(false);
+  }
+
+  async function handleSaveSettings(e) {
+    e.preventDefault();
+    const patch = {};
+    const threshold = parseFloat(draft.slouchThreshold);
+    const slouchDur = parseFloat(draft.slouchDurationSeconds);
+    const corrDur = parseFloat(draft.correctionDurationSeconds);
+    if (Number.isFinite(threshold)) patch.slouchThreshold = threshold;
+    if (Number.isFinite(slouchDur)) patch.slouchDurationSeconds = slouchDur;
+    if (Number.isFinite(corrDur)) patch.correctionDurationSeconds = corrDur;
+    try {
+      await saveSettings(patch);
+      setSaveSuccess(true);
+    } catch {
+      setSaveSuccess(false);
+    }
+  }
 
   const active = Boolean(session);
   const state = session ? session.state : 'idle';
@@ -146,6 +186,65 @@ export default function App() {
               </li>
             ))}
           </ul>
+        )}
+      </section>
+
+      <section aria-label="Detection settings">
+        <h2>Detection settings</h2>
+        {settingsLoading && settings === null && <p>Loading settings…</p>}
+        {settingsError && (
+          <p role="alert">
+            Settings error: {settingsError}
+          </p>
+        )}
+        {settings && draft && (
+          <form onSubmit={handleSaveSettings} aria-label="Settings form">
+            <fieldset>
+              <legend>Slouch detection parameters</legend>
+              <label htmlFor="settings-slouch-threshold">
+                Slouch threshold (0–1)
+                <input
+                  id="settings-slouch-threshold"
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  max="1"
+                  value={draft.slouchThreshold}
+                  onChange={(e) => handleDraftChange('slouchThreshold', e.target.value)}
+                />
+              </label>
+              <label htmlFor="settings-slouch-duration">
+                Slouch duration (seconds)
+                <input
+                  id="settings-slouch-duration"
+                  type="number"
+                  step="0.1"
+                  min="0.1"
+                  max="60"
+                  value={draft.slouchDurationSeconds}
+                  onChange={(e) => handleDraftChange('slouchDurationSeconds', e.target.value)}
+                />
+              </label>
+              <label htmlFor="settings-correction-duration">
+                Correction duration (seconds)
+                <input
+                  id="settings-correction-duration"
+                  type="number"
+                  step="0.1"
+                  min="0.1"
+                  max="60"
+                  value={draft.correctionDurationSeconds}
+                  onChange={(e) => handleDraftChange('correctionDurationSeconds', e.target.value)}
+                />
+              </label>
+            </fieldset>
+            <button type="submit" id="settings-save-btn" disabled={saving}>
+              {saving ? 'Saving…' : 'Save settings'}
+            </button>
+            {saveSuccess && !settingsError && (
+              <p role="status">Settings saved.</p>
+            )}
+          </form>
         )}
       </section>
 

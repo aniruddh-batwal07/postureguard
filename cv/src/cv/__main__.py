@@ -1,4 +1,4 @@
-"""PostureGuard CV service entry point (M2.1: camera + events; M2.2: pose baseline; M2.3: slouch rules; M3.1: event forwarding)."""
+"""PostureGuard CV service entry point (M2.1: camera + events; M2.2: pose baseline; M2.3: slouch rules; M3.1: event forwarding; M3.3: live settings)."""
 
 from __future__ import annotations
 
@@ -96,6 +96,35 @@ def capture_baseline_for_rule(
         raise
 
 
+def _build_rule_from_config(baseline: PostureBaseline, config: Config) -> SlouchRule:
+    """Build a SlouchRule from a Config object (env-based defaults)."""
+    return SlouchRule(
+        baseline.to_measurement(),
+        slouch_threshold=config.slouch_threshold,
+        slouch_duration_seconds=config.slouch_duration_seconds,
+        correction_duration_seconds=config.correction_duration_seconds,
+    )
+
+
+def _build_rule_from_settings(baseline: PostureBaseline, settings: Any) -> SlouchRule:
+    """Build a SlouchRule from a CvSettings object (live backend settings)."""
+    return SlouchRule(
+        baseline.to_measurement(),
+        slouch_threshold=settings.slouchThreshold,
+        slouch_duration_seconds=settings.slouchDurationSeconds,
+        correction_duration_seconds=settings.correctionDurationSeconds,
+    )
+
+
+def _log_rule_params(threshold: float, slouch_dur: float, correction_dur: float) -> None:
+    print(
+        f"[cv] monitoring: threshold={threshold:.2f}, "
+        f"slouch_duration={slouch_dur:.1f}s, "
+        f"correction_duration={correction_dur:.1f}s",
+        flush=True,
+    )
+
+
 def run(
     config: Config,
     client: EventClient,
@@ -107,6 +136,7 @@ def run(
     baseline_max_seconds: float = 5.0,
     preview_enabled: bool = True,
     time_fn: Callable[[], float] = time.monotonic,
+    settings_poller: Any | None = None,
 ) -> str:
     """Open the camera, resolve a session, and capture until stopped.
 
@@ -115,6 +145,12 @@ def run(
     or recovery has been sustained for its configured duration the event is
     forwarded to the backend via ``POST /api/events`` (M3.1). A failed forward
     is logged and the loop continues; it never crashes the service.
+
+    When ``settings_poller`` is provided (M3.3), the monitoring loop calls
+    ``poller.poll()`` on each frame and rebuilds the ``SlouchRule`` with the
+    same baseline but updated parameters whenever settings change.  The poller
+    swallows its own network / validation errors so a transient backend outage
+    never interrupts monitoring.
 
     When ``preview_enabled`` is True, a development-only preview window shows
     the webcam feed with detected landmarks and calibration progress while the
@@ -126,6 +162,7 @@ def run(
     preview = PreviewRenderer() if preview_enabled else None
     session_id = ""
     rule: SlouchRule | None = None
+    baseline_result: PostureBaseline | None = None
     try:
         try:
             camera.open()
@@ -139,26 +176,31 @@ def run(
         session = resolve_active_session(client)
         session_id = str(session["id"])
 
+        if settings_poller is not None:
+            # Fetch the latest backend settings up front so the first rule (and
+            # monitoring without a detector) starts from current values. A
+            # transient backend outage leaves the config-based settings active.
+            settings_poller.poll()
+
         if detector is not None:
             detector.initialize()
-            baseline = capture_baseline_for_rule(
+            baseline_result = capture_baseline_for_rule(
                 camera,
                 detector,
                 baseline_min_samples,
                 baseline_max_seconds,
                 preview=preview,
             )
-            rule = SlouchRule(
-                baseline.to_measurement(),
-                slouch_threshold=config.slouch_threshold,
-                slouch_duration_seconds=config.slouch_duration_seconds,
-                correction_duration_seconds=config.correction_duration_seconds,
-            )
-            print(
-                f"[cv] monitoring: threshold={config.slouch_threshold:.2f}, "
-                f"slouch_duration={config.slouch_duration_seconds:.1f}s, "
-                f"correction_duration={config.correction_duration_seconds:.1f}s",
-                flush=True,
+
+            if settings_poller is not None:
+                live = settings_poller.current_settings
+                rule = _build_rule_from_settings(baseline_result, live)
+            else:
+                rule = _build_rule_from_config(baseline_result, config)
+            _log_rule_params(
+                rule.slouch_threshold,
+                rule.slouch_duration_seconds,
+                rule.correction_duration_seconds,
             )
         else:
             print(f"[cv] no pose detector; monitoring disabled for session {session_id}", flush=True)
@@ -166,6 +208,17 @@ def run(
         frames = 0
         while max_frames is None or frames < max_frames:
             frame = camera.read()
+
+            # M3.3: poll for settings updates on each frame; rebuild rule when changed.
+            if settings_poller is not None and baseline_result is not None and rule is not None:
+                if settings_poller.poll():
+                    live = settings_poller.current_settings
+                    rule = _build_rule_from_settings(baseline_result, live)
+                    print(
+                        "[cv] rule updated with new settings",
+                        flush=True,
+                    )
+
             if rule is not None:
                 landmarks = detector.detect(frame)
                 measurement = (
@@ -187,7 +240,7 @@ def run(
 def main() -> int:
     parser = argparse.ArgumentParser(
         prog="postureguard-cv",
-        description="PostureGuard computer vision service (M2.3: slouch rules).",
+        description="PostureGuard computer vision service (M3.3: live settings).",
     )
     parser.add_argument(
         "--no-preview",
@@ -213,6 +266,17 @@ def main() -> int:
     camera = Camera(config.camera_index)
     detector = PoseDetector()
 
+    # M3.3: create a poller using config defaults as the initial settings so the
+    # service starts monitoring even if the backend is temporarily unavailable.
+    from cv.settings import CvSettings, SettingsPoller  # noqa: PLC0415
+
+    initial_settings = CvSettings(
+        slouchThreshold=config.slouch_threshold,
+        slouchDurationSeconds=config.slouch_duration_seconds,
+        correctionDurationSeconds=config.correction_duration_seconds,
+    )
+    settings_poller = SettingsPoller(client, initial_settings=initial_settings)
+
     def _on_signal(_signum: int, _frame: Any) -> None:
         raise _StopRequested()
 
@@ -228,6 +292,7 @@ def main() -> int:
             baseline_min_samples=args.min_samples,
             baseline_max_seconds=args.max_seconds,
             preview_enabled=not args.no_preview,
+            settings_poller=settings_poller,
         )
     except _StopRequested:
         pass

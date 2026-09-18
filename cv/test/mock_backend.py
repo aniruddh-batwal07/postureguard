@@ -12,12 +12,18 @@ class MockBackend:
         self.active_session = None
         self.session_counter = 0
         self.events_status = 201
+        # M3.3: current settings returned by GET /api/settings
+        self.settings = {
+            "slouchThreshold": 0.15,
+            "slouchDurationSeconds": 2.0,
+            "correctionDurationSeconds": 2.0,
+        }
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), self._make_handler())
         self.base_url = f"http://127.0.0.1:{self._server.server_address[1]}"
         thread = Thread(target=self._server.serve_forever, daemon=True)
         thread.start()
 
-    def route(self, method, path):
+    def route(self, method, path, payload=None):
         if (method, path) == ("GET", "/api/status"):
             return 200, {"status": "ok", "service": "postureguard-backend"}
         if (method, path) == ("GET", "/api/sessions/active"):
@@ -38,6 +44,12 @@ class MockBackend:
                 "timestamp": payload.get("timestamp"),
             }
             return self.events_status, {"event": event}
+        if (method, path) == ("GET", "/api/settings"):
+            return 200, {"settings": self.settings}
+        if method == "PUT" and path == "/api/settings":
+            if payload and isinstance(payload, dict):
+                self.settings = {**self.settings, **payload}
+            return 200, {"settings": self.settings}
         return 404, {"error": "Not Found"}
 
     def _make_handler(self):
@@ -51,7 +63,7 @@ class MockBackend:
                 backend.requests.append((self.command, self.path, payload))
                 if self.path == "/api/events" and payload:
                     backend.events.append(payload)
-                status, data = backend.route(self.command, self.path)
+                status, data = backend.route(self.command, self.path, payload)
                 encoded = json.dumps(data).encode("utf-8")
                 self.send_response(status)
                 self.send_header("Content-Type", "application/json")
@@ -63,6 +75,9 @@ class MockBackend:
                 self._handle()
 
             def do_POST(self):
+                self._handle()
+
+            def do_PUT(self):
                 self._handle()
 
             def log_message(self, *args):

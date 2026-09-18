@@ -4,12 +4,15 @@ const mongo = require('./persistence/mongo');
 const createStatusRouter = require('./routes/status');
 const { createSessionStore } = require('./persistence/sessions');
 const { createEventStore } = require('./persistence/events');
+const { createSettingsStore } = require('./persistence/settings');
 const { createSessionService } = require('./sessions/service');
 const { createEventService } = require('./events/service');
 const { createStatisticsService } = require('./statistics/service');
+const { createSettingsService } = require('./settings/service');
 const createSessionsRouter = require('./routes/sessions');
 const createEventsRouter = require('./routes/events');
 const createStatisticsRouter = require('./routes/statistics');
+const createSettingsRouter = require('./routes/settings');
 
 function errorToResponse(err) {
   switch (err.code) {
@@ -26,9 +29,10 @@ function errorToResponse(err) {
   }
 }
 
-function createApp({ persistence = mongo, sessionService, eventService, statisticsService } = {}) {
+function createApp({ persistence = mongo, sessionService, eventService, statisticsService, settingsService } = {}) {
   const store = createSessionStore(persistence);
   const eventStore = createEventStore(persistence);
+  const settingsStore = createSettingsStore(persistence);
   const sessions = sessionService || createSessionService({ store });
   const events = eventService || createEventService({
     store: eventStore,
@@ -38,6 +42,7 @@ function createApp({ persistence = mongo, sessionService, eventService, statisti
     sessionStore: store,
     eventStore,
   });
+  const settings = settingsService || createSettingsService({ store: settingsStore });
 
   const app = express();
 
@@ -46,6 +51,7 @@ function createApp({ persistence = mongo, sessionService, eventService, statisti
   app.use('/api', createSessionsRouter(sessions));
   app.use('/api', createEventsRouter(events));
   app.use('/api', createStatisticsRouter(statistics));
+  app.use('/api', createSettingsRouter(settings));
 
   app.use((_req, res) => {
     res.status(404).json({ error: 'Not Found' });

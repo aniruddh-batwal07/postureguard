@@ -4,6 +4,7 @@ import App from '../src/App';
 import * as api from '../src/api/sessions';
 import * as eventsApi from '../src/api/events';
 import * as statisticsApi from '../src/api/statistics';
+import * as settingsApi from '../src/api/settings';
 
 vi.mock('../src/api/sessions', () => ({
   getActiveSession: vi.fn(),
@@ -17,6 +18,11 @@ vi.mock('../src/api/events', () => ({
 
 vi.mock('../src/api/statistics', () => ({
   getStatistics: vi.fn(),
+}));
+
+vi.mock('../src/api/settings', () => ({
+  getSettings: vi.fn(),
+  updateSettings: vi.fn(),
 }));
 
 const SESSION_ID = 'a2f4c3b1-1111-4222-8333-444455556666';
@@ -54,10 +60,21 @@ function statistics(overrides = {}) {
   };
 }
 
+function defaultSettings(overrides = {}) {
+  return {
+    slouchThreshold: 0.15,
+    slouchDurationSeconds: 2.0,
+    correctionDurationSeconds: 2.0,
+    ...overrides,
+  };
+}
+
 beforeEach(() => {
   vi.resetAllMocks();
   eventsApi.getEvents.mockResolvedValue([]);
   statisticsApi.getStatistics.mockResolvedValue(statistics());
+  settingsApi.getSettings.mockResolvedValue(defaultSettings());
+  settingsApi.updateSettings.mockResolvedValue(defaultSettings());
   // Keep the session-state poll from firing during count-sensitive tests.
   vi.stubEnv('VITE_SESSION_POLL_INTERVAL_MS', '60000');
 });
@@ -380,5 +397,94 @@ describe('App statistics', () => {
     expect(section).toHaveTextContent('1h');
     expect(section).toHaveTextContent('2');
     expect(section).toHaveTextContent('1');
+  });
+});
+
+describe('App settings', () => {
+  beforeEach(() => {
+    api.getActiveSession.mockResolvedValue(null);
+  });
+
+  it('renders the settings section with loaded values', async () => {
+    settingsApi.getSettings.mockResolvedValue(defaultSettings({
+      slouchThreshold: 0.15,
+      slouchDurationSeconds: 2.0,
+      correctionDurationSeconds: 2.0,
+    }));
+    render(<App />);
+
+    const section = await screen.findByLabelText('Detection settings');
+    await waitFor(() => expect(within(section).getByLabelText(/Slouch threshold/i)).toBeInTheDocument());
+
+    expect(within(section).getByLabelText(/Slouch threshold/i)).toHaveValue(0.15);
+    expect(within(section).getByLabelText(/Slouch duration/i)).toHaveValue(2.0);
+    expect(within(section).getByLabelText(/Correction duration/i)).toHaveValue(2.0);
+  });
+
+  it('shows a loading state while settings are being fetched', async () => {
+    settingsApi.getSettings.mockImplementation(() => new Promise(() => {}));
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByText('Loading settings…')).toBeInTheDocument());
+  });
+
+  it('shows an error when loading settings fails', async () => {
+    settingsApi.getSettings.mockRejectedValue(new Error('MongoDB is not connected'));
+    render(<App />);
+
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent('Settings error: MongoDB is not connected'),
+    );
+  });
+
+  it('saves settings and shows a success message', async () => {
+    settingsApi.getSettings.mockResolvedValue(defaultSettings());
+    settingsApi.updateSettings.mockResolvedValue(defaultSettings({ slouchThreshold: 0.25 }));
+    render(<App />);
+
+    const saveBtn = await screen.findByRole('button', { name: /Save settings/i });
+    await waitFor(() => expect(saveBtn).not.toBeDisabled());
+
+    await userEvent.click(saveBtn);
+
+    await waitFor(() => expect(settingsApi.updateSettings).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Settings saved.'));
+  });
+
+  it('shows saving state while the PUT is in flight', async () => {
+    settingsApi.getSettings.mockResolvedValue(defaultSettings());
+    settingsApi.updateSettings.mockImplementation(() => new Promise(() => {}));
+    render(<App />);
+
+    const saveBtn = await screen.findByRole('button', { name: /Save settings/i });
+    await waitFor(() => expect(saveBtn).not.toBeDisabled());
+
+    await userEvent.click(saveBtn);
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /Saving…/i })).toBeInTheDocument());
+  });
+
+  it('shows an error when saving settings fails', async () => {
+    settingsApi.getSettings.mockResolvedValue(defaultSettings());
+    settingsApi.updateSettings.mockRejectedValue(new Error('slouchThreshold must be >= 0'));
+    render(<App />);
+
+    const saveBtn = await screen.findByRole('button', { name: /Save settings/i });
+    await waitFor(() => expect(saveBtn).not.toBeDisabled());
+
+    await userEvent.click(saveBtn);
+
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent('slouchThreshold must be >= 0'),
+    );
+  });
+
+  it('existing session behavior remains intact alongside the settings section', async () => {
+    api.getActiveSession.mockResolvedValue(session({ state: 'monitoring' }));
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByText('monitoring')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByLabelText('Detection settings')).toBeInTheDocument());
+    expect(screen.getByRole('button', { name: 'End Session' })).toBeInTheDocument();
   });
 });
