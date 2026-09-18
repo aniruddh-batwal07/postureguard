@@ -5,8 +5,9 @@ distraction through a webcam, records violations, and automatically uses a
 robotic arm to physically block the laptop screen until the user corrects
 their behavior.
 
-**Status:** Milestone M0.2 — monorepo scaffold + shared configuration. No product
-functionality is implemented yet. See `docs/development-plan.md`.
+**Status:** In progress — Phases 0–1 (session spine) and the Phase 2/M3.1 detection pipeline
+are implemented; M3.2 adds event history + statistics on the dashboard. Phone detection,
+hardware (Phase 4–5), and Phase 6 remain. See `docs/development-plan.md`.
 
 ## Repository layout
 

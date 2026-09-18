@@ -6,8 +6,10 @@ const { createSessionStore } = require('./persistence/sessions');
 const { createEventStore } = require('./persistence/events');
 const { createSessionService } = require('./sessions/service');
 const { createEventService } = require('./events/service');
+const { createStatisticsService } = require('./statistics/service');
 const createSessionsRouter = require('./routes/sessions');
 const createEventsRouter = require('./routes/events');
+const createStatisticsRouter = require('./routes/statistics');
 
 function errorToResponse(err) {
   switch (err.code) {
@@ -24,12 +26,17 @@ function errorToResponse(err) {
   }
 }
 
-function createApp({ persistence = mongo, sessionService, eventService } = {}) {
+function createApp({ persistence = mongo, sessionService, eventService, statisticsService } = {}) {
   const store = createSessionStore(persistence);
+  const eventStore = createEventStore(persistence);
   const sessions = sessionService || createSessionService({ store });
   const events = eventService || createEventService({
-    store: createEventStore(persistence),
+    store: eventStore,
     findSessionById: store.findBySessionId,
+  });
+  const statistics = statisticsService || createStatisticsService({
+    sessionStore: store,
+    eventStore,
   });
 
   const app = express();
@@ -38,6 +45,7 @@ function createApp({ persistence = mongo, sessionService, eventService } = {}) {
   app.use('/api', createStatusRouter(persistence));
   app.use('/api', createSessionsRouter(sessions));
   app.use('/api', createEventsRouter(events));
+  app.use('/api', createStatisticsRouter(statistics));
 
   app.use((_req, res) => {
     res.status(404).json({ error: 'Not Found' });

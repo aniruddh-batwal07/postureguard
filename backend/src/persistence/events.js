@@ -31,7 +31,25 @@ function createEventStore(persistence) {
     }
   }
 
-  return { insert, listBySession };
+  async function countsBySession(sessionId) {
+    try {
+      const rows = await collection()
+        .aggregate([
+          { $match: { sessionId } },
+          { $group: { _id: '$type', count: { $sum: 1 } } },
+        ])
+        .toArray();
+      const counts = {};
+      for (const row of rows) {
+        counts[row._id] = row.count;
+      }
+      return counts;
+    } catch (err) {
+      throw toMongoUnavailable(err);
+    }
+  }
+
+  return { insert, listBySession, countsBySession };
 }
 
 module.exports = { createEventStore };

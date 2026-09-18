@@ -1,8 +1,9 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import App from '../src/App';
 import * as api from '../src/api/sessions';
 import * as eventsApi from '../src/api/events';
+import * as statisticsApi from '../src/api/statistics';
 
 vi.mock('../src/api/sessions', () => ({
   getActiveSession: vi.fn(),
@@ -12,6 +13,10 @@ vi.mock('../src/api/sessions', () => ({
 
 vi.mock('../src/api/events', () => ({
   getEvents: vi.fn(),
+}));
+
+vi.mock('../src/api/statistics', () => ({
+  getStatistics: vi.fn(),
 }));
 
 const SESSION_ID = 'a2f4c3b1-1111-4222-8333-444455556666';
@@ -37,9 +42,22 @@ function event(overrides = {}) {
   };
 }
 
+function statistics(overrides = {}) {
+  return {
+    sessionId: SESSION_ID,
+    durationSeconds: 600,
+    violationCount: 0,
+    correctionCount: 0,
+    startedAt: '2026-09-13T10:00:00.000Z',
+    endedAt: null,
+    ...overrides,
+  };
+}
+
 beforeEach(() => {
   vi.resetAllMocks();
   eventsApi.getEvents.mockResolvedValue([]);
+  statisticsApi.getStatistics.mockResolvedValue(statistics());
   // Keep the session-state poll from firing during count-sensitive tests.
   vi.stubEnv('VITE_SESSION_POLL_INTERVAL_MS', '60000');
 });
@@ -274,5 +292,93 @@ describe('App live events', () => {
         'Events error: MongoDB is not connected',
       ),
     );
+  });
+});
+
+describe('App statistics', () => {
+  it('renders duration, violations, and corrections for an active session', async () => {
+    api.getActiveSession.mockResolvedValue(session({ state: 'monitoring' }));
+    statisticsApi.getStatistics.mockResolvedValue(
+      statistics({ durationSeconds: 7200, violationCount: 3, correctionCount: 2 }),
+    );
+    render(<App />);
+
+    const section = screen.getByLabelText('Session statistics');
+    await waitFor(() => expect(section).toHaveTextContent('2h'));
+    expect(section).toHaveTextContent('Violations:');
+    expect(section).toHaveTextContent('3');
+    expect(section).toHaveTextContent('Corrections:');
+    expect(section).toHaveTextContent('2');
+    expect(statisticsApi.getStatistics).toHaveBeenCalledWith(SESSION_ID);
+  });
+
+  it('renders event history alongside the statistics', async () => {
+    api.getActiveSession.mockResolvedValue(session({ state: 'monitoring' }));
+    eventsApi.getEvents.mockResolvedValue([event({ type: 'slouch_violation' })]);
+    statisticsApi.getStatistics.mockResolvedValue(
+      statistics({ durationSeconds: 300, violationCount: 1, correctionCount: 1 }),
+    );
+    render(<App />);
+
+    await waitFor(() =>
+      expect(screen.getByText('Posture violation detected')).toBeInTheDocument(),
+    );
+    const section = screen.getByLabelText('Session statistics');
+    expect(section).toHaveTextContent('5m 0s');
+    expect(section).toHaveTextContent('1');
+  });
+
+  it('renders an empty state when no session exists', async () => {
+    api.getActiveSession.mockResolvedValue(null);
+    render(<App />);
+
+    await waitFor(() =>
+      expect(screen.getByText('Start a session to see statistics.')).toBeInTheDocument(),
+    );
+    expect(statisticsApi.getStatistics).not.toHaveBeenCalled();
+  });
+
+  it('shows a loading state while statistics are being fetched', async () => {
+    api.getActiveSession.mockResolvedValue(session({ state: 'monitoring' }));
+    statisticsApi.getStatistics.mockImplementation(() => new Promise(() => {}));
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByText('Loading statistics…')).toBeInTheDocument());
+  });
+
+  it('shows an error when loading statistics fails', async () => {
+    api.getActiveSession.mockResolvedValue(session({ state: 'monitoring' }));
+    statisticsApi.getStatistics.mockRejectedValue(new Error('MongoDB is not connected'));
+    render(<App />);
+
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        'Statistics error: MongoDB is not connected',
+      ),
+    );
+  });
+
+  it('keeps the final statistics visible after the session ends', async () => {
+    const active = session({ state: 'monitoring' });
+    const ended = session({ state: 'ended', endedAt: '2026-09-13T11:00:00.000Z' });
+    api.getActiveSession.mockResolvedValueOnce(active).mockResolvedValueOnce(null);
+    api.endSession.mockResolvedValue(ended);
+    statisticsApi.getStatistics.mockResolvedValue(
+      statistics({ durationSeconds: 3600, violationCount: 2, correctionCount: 1, endedAt: '2026-09-13T11:00:00.000Z' }),
+    );
+    render(<App />);
+
+    const end = screen.getByRole('button', { name: 'End Session' });
+    await waitFor(() => expect(end).toBeEnabled());
+
+    await userEvent.click(end);
+
+    await waitFor(() => expect(api.endSession).toHaveBeenCalledWith(SESSION_ID));
+    await waitFor(() => expect(screen.getByText('idle')).toBeInTheDocument());
+
+    const section = screen.getByLabelText('Session statistics');
+    expect(section).toHaveTextContent('1h');
+    expect(section).toHaveTextContent('2');
+    expect(section).toHaveTextContent('1');
   });
 });

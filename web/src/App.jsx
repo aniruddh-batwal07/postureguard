@@ -1,5 +1,7 @@
+import { useEffect, useState } from 'react';
 import { useSession } from './hooks/useSession';
 import { useSessionEvents } from './hooks/useSessionEvents';
+import { useSessionStatistics } from './hooks/useSessionStatistics';
 
 const STATE_LABELS = {
   idle: 'No session active',
@@ -23,10 +25,44 @@ function formatEventTime(timestamp) {
   return date.toLocaleTimeString();
 }
 
+function formatDuration(seconds) {
+  if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds < 0) {
+    return '';
+  }
+  const total = Math.floor(seconds);
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const secs = total % 60;
+  if (hours > 0 && minutes > 0) {
+    return `${hours}h ${minutes}m`;
+  }
+  if (hours > 0) {
+    return `${hours}h`;
+  }
+  if (minutes > 0) {
+    return `${minutes}m ${secs}s`;
+  }
+  return `${secs}s`;
+}
+
 export default function App() {
   const { session, loading, busy, error, startSession, endActiveSession } = useSession();
+  const [lastSessionId, setLastSessionId] = useState(null);
+
+  useEffect(() => {
+    if (session) {
+      setLastSessionId(session.id);
+    }
+  }, [session]);
+
   const activeSessionId = session && session.state !== 'ended' ? session.id : null;
+  const statsSessionId = session ? session.id : lastSessionId;
   const { events, loading: eventsLoading, error: eventsError } = useSessionEvents(activeSessionId);
+  const {
+    statistics,
+    loading: statisticsLoading,
+    error: statisticsError,
+  } = useSessionStatistics(statsSessionId);
 
   const active = Boolean(session);
   const state = session ? session.state : 'idle';
@@ -58,6 +94,34 @@ export default function App() {
         <button type="button" onClick={endActiveSession} disabled={busy || loading || !session}>
           End Session
         </button>
+      </section>
+
+      <section aria-label="Session statistics">
+        <h2>Session statistics</h2>
+        {statisticsError && (
+          <p role="alert">
+            Statistics error: {statisticsError}
+          </p>
+        )}
+        {!statsSessionId && !statistics && !statisticsError && (
+          <p>Start a session to see statistics.</p>
+        )}
+        {statsSessionId && statisticsLoading && statistics === null && !statisticsError && (
+          <p>Loading statistics…</p>
+        )}
+        {statistics && (
+          <ul>
+            <li>
+              Session duration: <strong>{formatDuration(statistics.durationSeconds)}</strong>
+            </li>
+            <li>
+              Violations: <strong>{statistics.violationCount}</strong>
+            </li>
+            <li>
+              Corrections: <strong>{statistics.correctionCount}</strong>
+            </li>
+          </ul>
+        )}
       </section>
 
       <section aria-label="Session events">
