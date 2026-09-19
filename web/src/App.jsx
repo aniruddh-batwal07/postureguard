@@ -8,7 +8,9 @@ const STATE_LABELS = {
   idle: 'No session active',
   baseline_capturing: 'Capturing posture baseline',
   monitoring: 'Monitoring posture',
+  blocking: 'Blocking screen — moving card into view',
   blocked: 'Screen blocked — fix your posture',
+  unblocking: 'Restoring screen — removing card',
   ending: 'Ending session',
   ended: 'Session ended',
 };
@@ -120,6 +122,11 @@ export default function App() {
           Session state: <strong>{state}</strong>
           <span> — {STATE_LABELS[state] || state}</span>
         </p>
+        {session && session.state === 'blocked' && (
+          <p>
+            <strong>Fix your posture.</strong>
+          </p>
+        )}
         {session && (
           <p>
             Session id: <code>{session.id}</code>

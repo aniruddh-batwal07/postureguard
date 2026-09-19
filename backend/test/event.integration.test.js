@@ -94,6 +94,21 @@ test('POST /api/events persists a valid correction_requested in MongoDB', async 
   assert.deepEqual(persisted.data, { reason: 'head_drop' });
 });
 
+test('POST /api/events baseline_captured transitions a baseline_capturing session to monitoring', async (t) => {
+  if (!connected) return t.skip(`MongoDB unavailable at ${TEST_URI}`);
+
+  const sessionId = await seedSession({ state: 'baseline_capturing' });
+  const res = await request(testApp()).post('/api/events').send(validEvent(sessionId, {
+    type: 'baseline_captured',
+  }));
+
+  assert.equal(res.status, 201);
+  assert.equal(res.body.event.type, 'baseline_captured');
+
+  const session = await sessionsCollection().findOne({ sessionId });
+  assert.equal(session.state, 'monitoring', 'backend moves the session to monitoring (authoritative)');
+});
+
 test('POST /api/events returns 404 for an unknown session and persists nothing', async (t) => {
   if (!connected) return t.skip(`MongoDB unavailable at ${TEST_URI}`);
 

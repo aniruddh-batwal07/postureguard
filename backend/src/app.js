@@ -29,14 +29,21 @@ function errorToResponse(err) {
   }
 }
 
-function createApp({ persistence = mongo, sessionService, eventService, statisticsService, settingsService } = {}) {
+function createApp({ persistence = mongo, sessionService, eventService, statisticsService, settingsService, hardware } = {}) {
   const store = createSessionStore(persistence);
   const eventStore = createEventStore(persistence);
   const settingsStore = createSettingsStore(persistence);
-  const sessions = sessionService || createSessionService({ store });
+  const sessions = sessionService || createSessionService({ store, hardware });
   const events = eventService || createEventService({
     store: eventStore,
     findSessionById: store.findBySessionId,
+    // Baseline completion always moves the session to monitoring (independent
+    // of hardware). Violations drive the mock arm only when hardware is
+    // configured; otherwise the event service degrades to recording events
+    // only (fail-safe: never pretend to block).
+    markBaselineCaptured: sessions.markBaselineCaptured,
+    blockSession: hardware ? sessions.blockSession : null,
+    retrieveSession: hardware ? sessions.retrieveSession : null,
   });
   const statistics = statisticsService || createStatisticsService({
     sessionStore: store,

@@ -1,5 +1,5 @@
 const { randomUUID } = require('node:crypto');
-const { SessionNotFoundError } = require('../sessions/service');
+const { SessionNotFoundError, InvalidSessionTransitionError } = require('../sessions/service');
 
 class SessionNotActiveError extends Error {
   constructor(message) {
@@ -9,7 +9,30 @@ class SessionNotActiveError extends Error {
   }
 }
 
-function createEventService({ store, findSessionById, now = () => new Date() }) {
+/**
+ * Dispatch one recorded event to the session/hardware layer (M4.2).
+ *
+ * The event is authoritative: it is persisted first and the session POST keeps
+ * returning 201 even when the hardware action cannot run. Duplicate events
+ * (INVALID_TRANSITION, e.g. a second violation while already blocked) and
+ * hardware failures (HARDWARE_* — device unavailable, timeout, protocol error)
+ * are logged and swallowed so they never break event ingestion.
+ */
+function isBenignDispatchError(err) {
+  if (err instanceof InvalidSessionTransitionError) {
+    return true;
+  }
+  return Boolean(err.code && typeof err.code === 'string' && err.code.startsWith('HARDWARE_'));
+}
+
+function createEventService({
+  store,
+  findSessionById,
+  now = () => new Date(),
+  markBaselineCaptured = null,
+  blockSession = null,
+  retrieveSession = null,
+}) {
   async function recordEvent({ sessionId, type, timestamp, data }) {
     const session = await findSessionById(sessionId);
     if (!session) {
@@ -29,7 +52,24 @@ function createEventService({ store, findSessionById, now = () => new Date() }) 
     if (data !== undefined) {
       event.data = data;
     }
-    return store.insert(event);
+    const persisted = await store.insert(event);
+
+    const action = type === 'slouch_violation' ? blockSession
+      : type === 'correction_requested' ? retrieveSession
+      : type === 'baseline_captured' ? markBaselineCaptured
+      : null;
+    if (action) {
+      try {
+        await action(sessionId);
+      } catch (err) {
+        if (isBenignDispatchError(err)) {
+          console.error(`[events] ${type} for session ${sessionId} did not trigger hardware: ${err.message}`);
+        } else {
+          throw err;
+        }
+      }
+    }
+    return persisted;
   }
 
   async function listEvents(sessionId, { limit = 100 } = {}) {

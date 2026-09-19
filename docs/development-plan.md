@@ -190,6 +190,20 @@ Phases 1 and 2 can run in parallel after Phase 0; Phase 3 needs both. Phase 4 ne
 - **Tests/verification:** end-to-end scripted test using mock arm; demo walkthrough.
 - **Blocking ADRs:** ADR-5 (end-of-session RETRIEVE behavior).
 - **Definition of done:** the entire product loop is demonstrable on the laptop with no physical arm.
+- **Status:** implemented (see `docs/m4-2-loop.md`). The BLOCK loop runs end to end: a
+  `slouch_violation` event drives the mock arm (exactly one `BLOCK`), the dashboard shows
+  `blocking → blocked` with a "Fix your posture." message, `correction_requested` sends
+  exactly one `RETRIEVE` and returns to `monitoring`, and ending a blocked session forces a
+  final `RETRIEVE` (ADR-5). The loop runs on a **real session**: `POST /api/sessions` starts
+  in `baseline_capturing`, the CV's `baseline_captured` event transitions it to `monitoring`
+  (backed by an FSM update, no arm movement), and only then can violations block the arm; a
+  failed baseline leaves the session `baseline_capturing` and never blocks. Proven without a
+  webcam or MongoDB by `backend/test/event-hardware-flow.test.js` and
+  `backend/test/hardware-loop.integration.test.js`
+  (in-memory persistence + fake serial device), plus a Mongo-backed `baseline_captured`
+  transition test in `backend/test/event.integration.test.js`. Known limitation documented in
+  `docs/m4-2-loop.md`: the real-webcam demo is blocked in this WSL environment (no camera
+  passthrough), so the scripted mock-arm loop stands in for it.
 
 ---
 

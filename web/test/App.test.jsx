@@ -203,7 +203,9 @@ describe('App session states', () => {
       idle: 'No session active',
       baseline_capturing: 'Capturing posture baseline',
       monitoring: 'Monitoring posture',
+      blocking: 'Blocking screen — moving card into view',
       blocked: 'Screen blocked — fix your posture',
+      unblocking: 'Restoring screen — removing card',
       ending: 'Ending session',
       ended: 'Session ended',
     };
@@ -231,6 +233,22 @@ describe('App session states', () => {
       () => expect(api.getActiveSession.mock.calls.length).toBeGreaterThanOrEqual(2),
       { timeout: 4000 },
     );
+  });
+
+  it('shows a Fix your posture message while blocked and clears it after recovery', async () => {
+    vi.stubEnv('VITE_SESSION_POLL_INTERVAL_MS', '60');
+    api.getActiveSession
+      .mockResolvedValueOnce(session({ state: 'blocked' }))
+      .mockResolvedValue(session({ state: 'monitoring' }));
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByText('Fix your posture.')).toBeInTheDocument());
+
+    await waitFor(() => expect(screen.queryByText('Fix your posture.')).not.toBeInTheDocument(), {
+      timeout: 4000,
+    });
+
+    expect(api.getActiveSession.mock.calls.length).toBeGreaterThanOrEqual(2);
   });
 });
 

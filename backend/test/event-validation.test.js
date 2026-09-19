@@ -32,6 +32,13 @@ test('accepts a valid correction_requested event', () => {
   assert.equal(result.value.type, 'correction_requested');
 });
 
+test('accepts a valid baseline_captured event', () => {
+  const result = validateEvent(validBody({ type: 'baseline_captured' }), { now: () => NOW });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.value.type, 'baseline_captured');
+});
+
 test('accepts an optional data object (uppercase uuid is fine)', () => {
   const body = validBody({ sessionId: SESSION_UUID.toUpperCase(), data: { magnitude: 0.3 } });
   const result = validateEvent(body, { now: () => NOW });
@@ -119,5 +126,9 @@ test('rejects a non-object data value', () => {
 });
 
 test('exposes the supported event types', () => {
-  assert.deepEqual([...SUPPORTED_TYPES].sort(), ['correction_requested', 'slouch_violation']);
+  assert.deepEqual([...SUPPORTED_TYPES].sort(), [
+    'baseline_captured',
+    'correction_requested',
+    'slouch_violation',
+  ]);
 });

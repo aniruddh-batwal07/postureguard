@@ -1,5 +1,8 @@
 const SESSION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const SUPPORTED_TYPES = ['slouch_violation', 'correction_requested'];
+// M3.1 detection events plus the M4.2 baseline lifecycle event. A successful
+// baseline capture (CV) posts baseline_captured; the backend marks the session
+// monitoring (architecture.md §5.2).
+const SUPPORTED_TYPES = ['slouch_violation', 'correction_requested', 'baseline_captured'];
 const ALLOWED_KEYS = ['sessionId', 'type', 'timestamp', 'data'];
 const MAX_FUTURE_SKEW_MS = 60_000;
 

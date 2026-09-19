@@ -23,6 +23,11 @@ from cv.pose import (
 )
 from cv.rules import SlouchRule
 
+# M4.2: posted to the backend once an upright-posture baseline has been captured
+# with enough valid samples. The backend moves the session from
+# baseline_capturing to monitoring on receipt (architecture.md §5.2).
+EVENT_BASELINE_CAPTURED = "baseline_captured"
+
 
 class _StopRequested(Exception):
     pass
@@ -67,9 +72,11 @@ def capture_baseline_for_rule(
 ) -> PostureBaseline:
     """Capture the upright baseline so ``run()`` can build the slouch rule.
 
-    Computes the per-session baseline from live frames (M2.2). The baseline
-    itself is not an event type the backend accepts, so nothing is posted here;
-    the caller sees the failure reason when the baseline cannot be captured.
+    Computes the per-session baseline from live frames (M2.2). The completed
+    baseline is announced to the backend as a ``baseline_captured`` event by
+    ``run()`` so the session can move to ``monitoring``; a failed baseline
+    raises here and nothing is posted. The caller sees the failure reason when
+    the baseline cannot be captured.
 
     Returns:
         PostureBaseline, so the caller can configure the M2.3 slouch rule.
@@ -141,10 +148,12 @@ def run(
     """Open the camera, resolve a session, and capture until stopped.
 
     When ``detector`` is provided, the session baseline feeds an M2.3
-    ``SlouchRule``: each monitoring frame updates the rule, and when a violation
-    or recovery has been sustained for its configured duration the event is
-    forwarded to the backend via ``POST /api/events`` (M3.1). A failed forward
-    is logged and the loop continues; it never crashes the service.
+    ``SlouchRule``: a successful capture forwards ``baseline_captured`` so the
+    backend moves the session to ``monitoring`` (M4.2), and each monitoring
+    frame updates the rule — when a violation or recovery has been sustained
+    for its configured duration the event is forwarded to the backend via
+    ``POST /api/events`` (M3.1). A failed forward is logged and the loop
+    continues; it never crashes the service.
 
     When ``settings_poller`` is provided (M3.3), the monitoring loop calls
     ``poller.poll()`` on each frame and rebuilds the ``SlouchRule`` with the
@@ -191,6 +200,9 @@ def run(
                 baseline_max_seconds,
                 preview=preview,
             )
+            # Only a successful baseline reaches the backend; a failed/timeout
+            # capture raises above and never moves the session to monitoring.
+            forward_rule_event(client, EVENT_BASELINE_CAPTURED, session_id)
 
             if settings_poller is not None:
                 live = settings_poller.current_settings

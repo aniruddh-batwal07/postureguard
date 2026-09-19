@@ -4,7 +4,7 @@ const {
   createEventService,
   SessionNotActiveError,
 } = require('../src/events/service');
-const { SessionNotFoundError } = require('../src/sessions/service');
+const { SessionNotFoundError, InvalidSessionTransitionError } = require('../src/sessions/service');
 const { MongoDBUnavailableError } = require('../src/persistence/mongo');
 
 const SESSION_UUID = 'd73b3e3e-6dd2-4f61-9d3e-2b7f4f4c2b3a';
@@ -123,6 +123,54 @@ test('recordEvent propagates a persistence failure', async () => {
   });
 
   await assert.rejects(service.recordEvent(eventInput()), MongoDBUnavailableError);
+});
+
+test('recordEvent dispatches baseline_captured to markBaselineCaptured', async () => {
+  const store = inMemoryEventStore();
+  const dispatched = [];
+  const service = createEventService({
+    store,
+    findSessionById: async () => session('baseline_capturing'),
+    now: fixedNow,
+    markBaselineCaptured: async (sessionId) => dispatched.push({ sessionId }),
+  });
+
+  const event = await service.recordEvent(eventInput({ type: 'baseline_captured' }));
+
+  assert.equal(event.type, 'baseline_captured');
+  assert.equal(store.events.length, 1, 'baseline event persisted');
+  assert.deepEqual(dispatched, [{ sessionId: SESSION_UUID }], 'markBaselineCaptured received the session id');
+});
+
+test('recordEvent swallows an INVALID_TRANSITION from baseline capture dispatch', async () => {
+  const store = inMemoryEventStore();
+  const service = createEventService({
+    store,
+    findSessionById: async () => session('monitoring'),
+    now: fixedNow,
+    markBaselineCaptured: async () => {
+      throw new InvalidSessionTransitionError('session already monitoring');
+    },
+  });
+
+  const event = await service.recordEvent(eventInput({ type: 'baseline_captured' }));
+
+  assert.equal(event.type, 'baseline_captured');
+  assert.equal(store.events.length, 1, 'duplicate baseline event is still persisted');
+});
+
+test('recordEvent with no baseline callback records baseline_captured without an action', async () => {
+  const store = inMemoryEventStore();
+  const service = createEventService({
+    store,
+    findSessionById: async () => session('baseline_capturing'),
+    now: fixedNow,
+  });
+
+  const event = await service.recordEvent(eventInput({ type: 'baseline_captured' }));
+
+  assert.equal(store.events.length, 1, 'no-hardware backend records the baseline event');
+  assert.equal(event.type, 'baseline_captured');
 });
 
 test('listEvents returns the persisted events for a session, oldest first', async () => {

@@ -110,3 +110,46 @@ test('endSession rejects an already-ended session', async () => {
   await assert.rejects(service.endSession(ended.sessionId), InvalidSessionTransitionError);
   assert.equal(store.calls.length, 0);
 });
+
+test('markBaselineCaptured transitions baseline_capturing to monitoring and persists it', async () => {
+  const capturing = { sessionId: 'd73b3e3e-6dd2-4f61-9d3e-2b7f4f4c2b3a', state: 'baseline_capturing', createdAt: new Date('2026-01-01T00:00:00.000Z'), updatedAt: new Date('2026-01-01T00:00:00.000Z'), endedAt: null };
+  const store = inMemoryStore(capturing);
+  const service = createSessionService({ store, now: fixedNow });
+
+  const monitoring = await service.markBaselineCaptured(capturing.sessionId);
+
+  assert.equal(monitoring.state, 'monitoring');
+  assert.equal(monitoring.updatedAt.getTime(), fixedNow().getTime());
+  assert.deepEqual(store.calls.map((c) => c.changes.state), ['monitoring']);
+
+  const persisted = await store.findBySessionId(capturing.sessionId);
+  assert.equal(persisted.state, 'monitoring');
+});
+
+test('markBaselineCaptured works without hardware configured', async () => {
+  const capturing = { sessionId: 'd73b3e3e-6dd2-4f61-9d3e-2b7f4f4c2b3a', state: 'baseline_capturing', createdAt: new Date('2026-01-01T00:00:00.000Z'), updatedAt: new Date('2026-01-01T00:00:00.000Z'), endedAt: null };
+  const store = inMemoryStore(capturing);
+  const service = createSessionService({ store, now: fixedNow });
+
+  const monitoring = await service.markBaselineCaptured(capturing.sessionId);
+  assert.equal(monitoring.state, 'monitoring');
+});
+
+test('markBaselineCaptured rejects an unknown session', async () => {
+  const store = inMemoryStore();
+  const service = createSessionService({ store, now: fixedNow });
+
+  await assert.rejects(service.markBaselineCaptured('no-such-session'), SessionNotFoundError);
+  assert.equal(store.calls.length, 0);
+});
+
+test('markBaselineCaptured rejects a session that is not capturing', async () => {
+  for (const state of ['monitoring', 'blocked', 'ending', 'ended']) {
+    const sessionDoc = { sessionId: 'd73b3e3e-6dd2-4f61-9d3e-2b7f4f4c2b3a', state, createdAt: new Date('2026-01-01T00:00:00.000Z'), updatedAt: new Date('2026-01-01T00:00:00.000Z'), endedAt: state === 'ended' ? new Date('2026-01-01T00:00:00.000Z') : null };
+    const store = inMemoryStore(sessionDoc);
+    const service = createSessionService({ store, now: fixedNow });
+
+    await assert.rejects(service.markBaselineCaptured(sessionDoc.sessionId), InvalidSessionTransitionError);
+    assert.equal(store.calls.length, 0, `no state change for ${state}`);
+  }
+});

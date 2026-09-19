@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from cv.__main__ import resolve_active_session, run
+from cv.__main__ import EVENT_BASELINE_CAPTURED, resolve_active_session, run
 from cv.config import Config
 from cv.events import EventClient
 from cv.pose import BaselineCaptureError, PoseLandmarks
@@ -229,11 +229,37 @@ def test_run_loop_forwards_sustained_slouch_event(capsys):
             preview_enabled=False,
             time_fn=clock,
         )
-        # Exactly one slouch_violation is forwarded to the backend.
+        # Exactly one baseline_captured event followed by the slouch violation.
         assert session_id == "session-1"
-        assert [e["type"] for e in backend.events] == [EVENT_SLOUCH_VIOLATION]
+        assert [e["type"] for e in backend.events] == [
+            EVENT_BASELINE_CAPTURED,
+            EVENT_SLOUCH_VIOLATION,
+        ]
         assert all(e["sessionId"] == "session-1" for e in backend.events)
         assert f"event sent: {EVENT_SLOUCH_VIOLATION}" in capsys.readouterr().out
+    finally:
+        backend.close()
+
+
+def test_run_loop_forwards_baseline_captured_after_successful_capture():
+    backend = MockBackend()
+    try:
+        camera = FakeCamera()
+        detector = SequenceDetector([_landmarks(_UPRIGHT)])
+        run(
+            Config(),
+            client_for(backend),
+            camera,
+            max_frames=1,
+            frame_delay=0,
+            detector=detector,
+            baseline_min_samples=1,
+            baseline_max_seconds=1.0,
+            preview_enabled=False,
+            time_fn=FakeMonotonic(),
+        )
+        assert [e["type"] for e in backend.events] == [EVENT_BASELINE_CAPTURED]
+        assert backend.events[0]["sessionId"] == "session-1"
     finally:
         backend.close()
 
@@ -257,7 +283,8 @@ def test_run_loop_does_not_forward_violation_for_upright_posture(capsys):
             preview_enabled=False,
             time_fn=FakeMonotonic(),
         )
-        assert backend.events == []
+        # Baseline captured, no violation: exactly the baseline event.
+        assert [e["type"] for e in backend.events] == [EVENT_BASELINE_CAPTURED]
         output = capsys.readouterr().out
         assert f"event sent: {EVENT_SLOUCH_VIOLATION}" not in output
     finally:
@@ -292,7 +319,9 @@ def test_run_loop_forwards_correction_after_recovery():
             preview_enabled=False,
             time_fn=FakeMonotonic(),
         )
+        # Baseline, then violation, then correction — in order.
         assert [e["type"] for e in backend.events] == [
+            EVENT_BASELINE_CAPTURED,
             EVENT_SLOUCH_VIOLATION,
             EVENT_CORRECTION_REQUESTED,
         ]

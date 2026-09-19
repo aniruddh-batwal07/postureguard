@@ -6,10 +6,13 @@ robotic arm to physically block the laptop screen until the user corrects
 their behavior.
 
 **Status:** In progress — Phases 0–3 (session spine, CV detection wired in, history,
-statistics, settings) and M4.1 (backend hardware module + simulated serial device) are
-implemented; the arm behaves via a simulated device only. The M4.2 full
-block/correct/unblock loop, phone detection, real hardware (Phase 5), and Phase 6 remain.
-See `docs/development-plan.md`.
+statistics, settings), M4.1 (backend hardware module + simulated serial device) and M4.2
+(full block/correct/unblock loop driven by events: a slouch violation now moves the
+mock arm to the screen via BLOCK, the dashboard shows blocking/blocked/unblocking plus a
+“Fix your posture.” message, and a correction retrieves the arm) are implemented. The arm
+behaves via a simulated device only, and the deterministic M4.2 loop is proven by an
+end-to-end test that needs no webcam or MongoDB. Phone detection, real hardware
+(Phase 5), and Phase 6 remain. See `docs/development-plan.md`.
 
 ## Repository layout
 

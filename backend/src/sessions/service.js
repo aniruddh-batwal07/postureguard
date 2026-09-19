@@ -47,6 +47,21 @@ function createSessionService({ store, hardware, now = () => new Date() }) {
     return store.findActive();
   }
 
+  // Baseline capture completion (M4.2): the CV signals a successful upright
+  // baseline via the `baseline_captured` event; the backend — authoritative for
+  // session state — moves the session from `baseline_capturing` to
+  // `monitoring`. A duplicate or out-of-order event raises
+  // INVALID_TRANSITION (swallowed as benign by the events layer) so capture is
+  // never restarted and state is never regressed. Independent of hardware.
+  async function markBaselineCaptured(sessionId) {
+    const session = await store.findBySessionId(sessionId);
+    if (!session) {
+      throw new SessionNotFoundError(`session ${sessionId} not found`);
+    }
+    assertState(session, 'monitoring');
+    return store.updateState(sessionId, { state: 'monitoring', updatedAt: now() });
+  }
+
   async function endSession(sessionId) {
     const session = await store.findBySessionId(sessionId);
     if (!session) {
@@ -143,6 +158,7 @@ function createSessionService({ store, hardware, now = () => new Date() }) {
   return {
     createSession,
     getActiveSession,
+    markBaselineCaptured,
     endSession,
     blockSession,
     retrieveSession,
