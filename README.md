@@ -5,9 +5,11 @@ distraction through a webcam, records violations, and automatically uses a
 robotic arm to physically block the laptop screen until the user corrects
 their behavior.
 
-**Status:** In progress — Phases 0–1 (session spine) and the Phase 2/M3.1 detection pipeline
-are implemented; M3.2 adds event history + statistics on the dashboard. Phone detection,
-hardware (Phase 4–5), and Phase 6 remain. See `docs/development-plan.md`.
+**Status:** In progress — Phases 0–3 (session spine, CV detection wired in, history,
+statistics, settings) and M4.1 (backend hardware module + simulated serial device) are
+implemented; the arm behaves via a simulated device only. The M4.2 full
+block/correct/unblock loop, phone detection, real hardware (Phase 5), and Phase 6 remain.
+See `docs/development-plan.md`.
 
 ## Repository layout
 

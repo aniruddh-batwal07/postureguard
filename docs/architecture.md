@@ -208,12 +208,32 @@ occur in legal order, and have a plausible timestamp. Duplicate events
 (`[ADR-3]` idempotency) are tolerated.
 
 ### 4.3 Hardware command boundary (Backend → Arduino)
-Text command protocol over serial — newline-delimited tokens (no
-implementation), to be frozen in firmware contract `[ADR-4]`:
-- `BLOCK` → arm moves card to screen → `BLOCK_OK`
-- `RETRIEVE` → arm returns card to dock → `RETRIEVE_OK`
-- `STATUS` → `STATE_DOCKED` | `STATE_BLOCKED` | `STATE_BUSY`
-- `ERROR_*` reported on any failure (stall, timeout, servo fault)
+Frozen text command protocol over serial — newline-delimited ASCII tokens
+(resolved in M4.1; closes the frame-format parts of ADR-2 and ADR-4). One
+request line → one response line. Requests and responses are single uppercase
+tokens terminated by `\n`. No checksums (student-project reliability bar).
+
+Commands (backend → device) and their exact acknowledgements:
+- `BLOCK`    → arm moves card from dock to screen → `BLOCK_OK` on completion
+- `RETRIEVE` → arm returns card to dock → `RETRIEVE_OK` on completion
+- `STATUS`   → device reports arm state → `STATE_DOCKED` | `STATE_BLOCKED` |
+  `STATE_BUSY`
+
+Responses carry no command echo. A `BLOCK` is only a success on `BLOCK_OK`, a
+`RETRIEVE` only on `RETRIEVE_OK`, and `STATUS` only resolves on a `STATE_*`
+line. Any `ERROR_*` token (`ERROR_STALL`, `ERROR_BUSY`, `ERROR_SERVO_FAULT`,
+...) reports failure. Anything else — including the OK for a different command
+— is a protocol violation. The backend applies a bounded per-command timeout
+(`HARDWARE_COMMAND_TIMEOUT_MS`, default `5000` ms); a silent device is a
+timeout, never a success. The backend hardware service serializes commands
+one-at-a-time (FIFO) so `BLOCK` and `RETRIEVE` are never on the wire
+concurrently (FR-18); the firmware also serializes.
+
+Transport: a line-based serial request/response interface
+(`backend/src/hardware/transport.js`) — `open` / `writeLine(line)` /
+`readLine(timeoutMs)` / `close`. The M4.1 simulated device implements this
+same shape, so swapping in the real Arduino serial driver (M5.3) touches only
+that seam.
 
 ### 4.4 Versioning
 Student project scope: no API versioning. Backward-incompatible changes are
@@ -491,17 +511,19 @@ here should be treated as settled.
   recommended — one-directional, simpler than WebSockets, fits push requirement;
   (b) WebSockets; (c) HTTP polling fallback. Needs confirmation.
 - **[ADR-2] Backend → Arduino transport.** Spec explicitly rules out ESP32 and
-  the assuming wired/USB serial in `product-spec.md §11`. Confirm the actual
-  Arduino model and transport: (a) native USB serial, (b) USB host → TTL
-  converter, or (c) WiFi/Bluetooth shield. This governs the serial protocol and
-  driver.
+  assumes wired/USB serial in `product-spec.md §11`. The transport is a
+  line-based serial request/response interface
+  (`backend/src/hardware/transport.js`), and the protocol shape is frozen in
+  §4.3. Native USB serial is the working assumption; the exact Arduino model
+  and whether the link is native USB vs. USB-host→TTL is confirmed at build
+  time (M5.x) — the transport interface abstracts that. **Resolved in M4.1.**
 - **[ADR-3] Event idempotency.** Whether duplicate `slouch_violation` /
   `correction_requested` events (from Python retries) are deduplicated on the
   backend via event IDs. Recommended: yes; confirm.
-- **[ADR-4] Hardware protocol shape.** Exact byte/line framing of the `BLOCK` /
-  `RETRIEVE` / `STATUS` protocol is frozen at implementation. Confirm frame
-  format and whether responses require checksums for a student-project
-  reliability bar.
+- **[ADR-4] Hardware protocol shape.** Frame format is frozen in §4.3:
+  newline-delimited uppercase ASCII tokens, one request → one response, exact
+  acknowledgement matching, `ERROR_*` for failures, no checksums. **Resolved
+  in M4.1.**
 - **[ADR-5] Session end during an in-progress BLOCK.** Whether the backend
   forces a final `RETRIEVE` at session end when the arm is mid-action or
   blocked. Recommended: yes, force RETRIEVE; confirm the desired end state.

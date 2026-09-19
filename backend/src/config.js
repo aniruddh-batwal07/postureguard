@@ -5,6 +5,7 @@ const mongoUri = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/posturegu
 const mongoServerSelectionTimeoutMS = Number(process.env.MONGO_SERVER_SELECTION_TIMEOUT_MS) || 5000;
 const cameraIndex = Number(process.env.CAMERA_INDEX) || 0;
 const serialPort = process.env.ARDUINO_SERIAL_PORT || '/dev/ttyACM0';
+const hardwareCommandTimeoutMs = Number(process.env.HARDWARE_COMMAND_TIMEOUT_MS) || 5000;
 
 module.exports = {
   host,
@@ -14,4 +15,5 @@ module.exports = {
   mongoServerSelectionTimeoutMS,
   cameraIndex,
   serialPort,
+  hardwareCommandTimeoutMs,
 };

@@ -29,9 +29,9 @@ Phases 1 and 2 can run in parallel after Phase 0; Phase 3 needs both. Phase 4 ne
 | ADR | Topic | Resolved by |
 |---|---|---|
 | ADR-1 | Dashboard push mechanism (SSE vs WS vs polling) | Phase 1 (M1.3) |
-| ADR-2 | Backend→Arduino transport (serial model) | Phase 4 |
+| ADR-2 | Backend→Arduino transport (serial model) | Phase 4 (M4.1) |
 | ADR-3 | Event idempotency (dedupe) | Phase 3 (M3.1) |
-| ADR-4 | Hardware protocol frame format | Phase 4 |
+| ADR-4 | Hardware protocol frame format | Phase 4 (M4.1) |
 | ADR-5 | Session end during in-progress BLOCK | Phase 4 (M4.2) |
 | ADR-6 | Mongo-out behavior | Phase 1 (M1.1) |
 | ADR-7 | Auth between local services | Phase 0 |
