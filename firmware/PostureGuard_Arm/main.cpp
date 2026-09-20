@@ -104,8 +104,8 @@ bool wrist3IsPositional = false;
 
 // Gripper Claw Settings (Channel 5 - MG90S Positional Servo)
 bool isPositional180Mode   = true;  
-bool gripperHoldPower      = true;  // v1.5: Active holding torque prevents claw from dropping / going limp
-int gripperOpenAngle       = 150;   // Calibrated full open angle
+bool gripperHoldPower      = false; // Cut PWM after move: prevents motor from stalling and overheating
+int gripperOpenAngle       = 115;   // Safe open angle: avoids mechanical linkage toggle-lock
 int gripperCloseAngle      = 80;    // Calibrated gentle clamp angle
 int angleCh5               = 80;    // Default closed
 bool gripperIsOpen         = false;
