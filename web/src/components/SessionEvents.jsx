@@ -7,14 +7,23 @@ const EVENT_LABELS = {
   baseline_captured: 'Baseline posture captured',
 };
 
+const EVENT_BADGE_CLASSES = {
+  slouch_violation: 'event-badge-danger',
+  correction_requested: 'event-badge-success',
+  baseline_captured: 'event-badge-info',
+};
+
 export default function SessionEvents({ events, loading, error }) {
   return (
     <section className="dashboard-card events-card" aria-label="Session events">
       <div className="card-header">
         <div>
           <h2 className="card-title">Session Events</h2>
-          <p className="card-subtitle">Recent detection and correction log</p>
+          <p className="card-subtitle">Real-time posture detection &amp; robotic arm intervention feed</p>
         </div>
+        <span className="events-count-badge">
+          {events.length} {events.length === 1 ? 'event' : 'events'}
+        </span>
       </div>
 
       {loading && events.length === 0 && <p className="loading-message">Loading events…</p>}
@@ -26,21 +35,27 @@ export default function SessionEvents({ events, loading, error }) {
       )}
 
       {!loading && !error && events.length === 0 && (
-        <p className="empty-message">No events yet.</p>
+        <p className="empty-message">No events recorded for this session yet.</p>
       )}
 
       {events.length > 0 && (
         <ul className="events-list">
-          {events.map((event) => (
-            <li key={event.id} className={`event-item event-type-${event.type}`}>
-              <span className="event-title">
-                {EVENT_LABELS[event.type] || event.type}
-              </span>
-              {formatTime(event.timestamp) && (
-                <time className="event-time"> at {formatTime(event.timestamp)}</time>
-              )}
-            </li>
-          ))}
+          {events.map((event) => {
+            const badgeClass = EVENT_BADGE_CLASSES[event.type] || 'event-badge-default';
+            return (
+              <li key={event.id} className="event-item">
+                <div className="event-main">
+                  <span className={`event-badge ${badgeClass}`}>
+                    <span className="event-badge-dot"></span>
+                    {EVENT_LABELS[event.type] || event.type}
+                  </span>
+                </div>
+                {formatTime(event.timestamp) && (
+                  <time className="event-time">at {formatTime(event.timestamp)}</time>
+                )}
+              </li>
+            );
+          })}
         </ul>
       )}
     </section>
