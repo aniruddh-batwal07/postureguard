@@ -33,6 +33,18 @@ function createEventService({
   blockSession = null,
   retrieveSession = null,
 }) {
+  async function waitForStateSettle(sessionId, transientState, timeoutMs = 35000) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const s = await findSessionById(sessionId);
+      if (!s || s.state !== transientState) {
+        return s;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    return null;
+  }
+
   async function recordEvent({ sessionId, type, timestamp, data }) {
     const session = await findSessionById(sessionId);
     if (!session) {
@@ -58,7 +70,22 @@ function createEventService({
       try {
         await blockSession(sessionId);
       } catch (err) {
-        if (isBenignDispatchError(err)) {
+        if (err instanceof InvalidSessionTransitionError) {
+          const current = await findSessionById(sessionId);
+          if (current && current.state === 'unblocking') {
+            await waitForStateSettle(sessionId, 'unblocking');
+            const settled = await findSessionById(sessionId);
+            if (settled && settled.state === 'monitoring') {
+              try {
+                await blockSession(sessionId);
+              } catch (subErr) {
+                if (!isBenignDispatchError(subErr)) throw subErr;
+              }
+            }
+          } else {
+            console.error(`[events] slouch_violation for session ${sessionId} did not trigger hardware: ${err.message}`);
+          }
+        } else if (isBenignDispatchError(err)) {
           console.error(`[events] slouch_violation for session ${sessionId} did not trigger hardware: ${err.message}`);
         } else {
           throw err;
@@ -68,7 +95,22 @@ function createEventService({
       try {
         await retrieveSession(sessionId);
       } catch (err) {
-        if (isBenignDispatchError(err)) {
+        if (err instanceof InvalidSessionTransitionError) {
+          const current = await findSessionById(sessionId);
+          if (current && current.state === 'blocking') {
+            await waitForStateSettle(sessionId, 'blocking');
+            const settled = await findSessionById(sessionId);
+            if (settled && settled.state === 'blocked') {
+              try {
+                await retrieveSession(sessionId);
+              } catch (subErr) {
+                if (!isBenignDispatchError(subErr)) throw subErr;
+              }
+            }
+          } else {
+            console.error(`[events] correction_requested for session ${sessionId} did not trigger hardware: ${err.message}`);
+          }
+        } else if (isBenignDispatchError(err)) {
           console.error(`[events] correction_requested for session ${sessionId} did not trigger hardware: ${err.message}`);
         } else {
           throw err;

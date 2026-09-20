@@ -1,0 +1,346 @@
+/*
+  PostureGuard - Phase 5 Arduino Firmware
+  Hardware: Arduino Uno + PCA9685 16-Channel PWM Servo Driver (I2C 0x40)
+  
+  Physical Channel Mapping:
+    - Channel 0: Waist / Base   (MG995 180° Positional Servo)
+    - Channel 1: Shoulder      (MG995 180° Positional Servo)
+    - Channel 2: Elbow         (MG995 180° Positional Servo)
+    - Channel 3: Wrist Roll    (SG90 restricted 0-180°)
+    - Channel 4: Wrist Pitch   (SG90 180° Positional Servo)
+    - Channel 5: Gripper Claw  (MG90S 180° Metal-Gear Positional Servo)
+      -> Calibrated: OPEN = 20°, CLOSE = 145°
+      -> Default hold power = OFF to protect power supply from stall current
+
+  Protocol Contract (Newline-delimited ASCII tokens at 115200 baud):
+    - BLOCK    -> Deploys blocker sheet in front of screen -> replies "BLOCK_OK"
+    - RETRIEVE -> Returns blocker sheet to dock position   -> replies "RETRIEVE_OK"
+    - STATUS   -> Replies "STATE_DOCKED" | "STATE_BLOCKED" | "STATE_BUSY"
+*/
+
+#include <Arduino.h>
+#include <Wire.h>
+#include <Adafruit_PWMServoDriver.h>
+
+Adafruit_PWMServoDriver pwm = Adafruit_PWMServoDriver(0x40);
+
+// Hardware Channels
+const int CH_WAIST    = 0; // 180 deg (MG995)
+const int CH_SHOULDER = 1; // 180 deg (MG995)
+const int CH_ELBOW    = 2; // 180 deg (MG995)
+const int CH_WRIST_3  = 3; // Wrist Roll (0-180 deg bounded)
+const int CH_WRIST_4  = 4; // Wrist Pitch (180 deg positional)
+const int CH_GRIPPER  = 5; // Gripper claw (MG90S)
+
+// 180-Degree Servo Calibration (50Hz on PCA9685)
+#define SERVOMIN   140 // approx 0 deg
+#define SERVOMAX   580 // approx 180 deg
+#define SERVO_FREQ 50  // 50 Hz
+
+#define FULL_CW     480  
+#define FULL_CCW    215  
+#define STOP_PULSE  0    
+
+#define MS_PER_DEG_WRIST3 3
+
+// Tracked Joint Positions
+int angleCh0 = 90;
+int angleCh1 = 90;
+int angleCh2 = 90;
+int angleCh4 = 90;
+int wrist3Angle = 90;
+
+// Gripper Claw Settings (Channel 5 - MG90S Positional Servo)
+bool isPositional180Mode   = true;  
+bool gripperHoldPower      = false; // Default OFF to save current
+int gripperOpenAngle       = 110;   // Safe open angle
+int gripperCloseAngle      = 70;    // Safe gentle clamp on card
+int angleCh5               = 70;    // Default closed
+bool gripperIsOpen         = false;
+
+// Arm Operational States per docs/architecture.md §4.3
+enum ArmState {
+  STATE_DOCKED,
+  STATE_BLOCKED,
+  STATE_BUSY
+};
+ArmState currentArmState = STATE_DOCKED;
+
+// Forward Declarations
+int angleToPulse(int ang);
+void stopAllMotors();
+void moveGripperPositional(int targetAngle);
+void gripperOpen();
+void gripperClose();
+void setPositionalJoint(int ch, int targetAngle);
+void setWristPitch(int targetAngle);
+void moveWrist3ToAngle(int targetAngle);
+void homeArm();
+void executeBlock();
+void executeRetrieve();
+void printStatus();
+
+int angleToPulse(int ang) {
+  ang = constrain(ang, 10, 170);
+  return map(ang, 0, 180, SERVOMIN, SERVOMAX);
+}
+
+void stopAllMotors() {
+  for (int i = 0; i < 16; i++) {
+    pwm.setPWM(i, 0, STOP_PULSE);
+  }
+}
+
+void moveGripperPositional(int targetAngle) {
+  targetAngle = constrain(targetAngle, 10, 170);
+  int start = angleCh5;
+  if (start < targetAngle) {
+    for (int a = start; a <= targetAngle; a += 2) {
+      pwm.setPWM(CH_GRIPPER, 0, angleToPulse(a));
+      delay(15);
+    }
+  } else {
+    for (int a = start; a >= targetAngle; a -= 2) {
+      pwm.setPWM(CH_GRIPPER, 0, angleToPulse(a));
+      delay(15);
+    }
+  }
+  pwm.setPWM(CH_GRIPPER, 0, angleToPulse(targetAngle));
+  delay(250);
+  if (!gripperHoldPower) {
+    pwm.setPWM(CH_GRIPPER, 0, STOP_PULSE);
+  }
+  angleCh5 = targetAngle;
+}
+
+void gripperOpen() {
+  moveGripperPositional(gripperOpenAngle);
+  gripperIsOpen = true;
+}
+
+void gripperClose() {
+  moveGripperPositional(gripperCloseAngle);
+  gripperIsOpen = false;
+}
+
+void setPositionalJoint(int ch, int targetAngle) {
+  targetAngle = constrain(targetAngle, 15, 165);
+  int* currentAnglePtr;
+  
+  switch (ch) {
+    case 0: currentAnglePtr = &angleCh0; break;
+    case 1: currentAnglePtr = &angleCh1; break;
+    case 2: currentAnglePtr = &angleCh2; break;
+    case 4: currentAnglePtr = &angleCh4; break;
+    default: return;
+  }
+
+  int start = *currentAnglePtr;
+
+  if (start < targetAngle) {
+    for (int a = start; a <= targetAngle; a += 2) {
+      pwm.setPWM(ch, 0, angleToPulse(a));
+      delay(15);
+    }
+  } else {
+    for (int a = start; a >= targetAngle; a -= 2) {
+      pwm.setPWM(ch, 0, angleToPulse(a));
+      delay(15);
+    }
+  }
+  pwm.setPWM(ch, 0, angleToPulse(targetAngle));
+  delay(250);
+  // Cut PWM signal after reaching target to prevent USB overcurrent
+  pwm.setPWM(ch, 0, STOP_PULSE);
+  *currentAnglePtr = targetAngle;
+}
+
+void setWristPitch(int targetAngle) {
+  setPositionalJoint(CH_WRIST_4, targetAngle);
+}
+
+void moveWrist3ToAngle(int targetAngle) {
+  targetAngle = constrain(targetAngle, 0, 180);
+  int delta = targetAngle - wrist3Angle;
+  if (delta == 0) return;
+  
+  int durationMs = abs(delta) * MS_PER_DEG_WRIST3;
+  if (durationMs < 30) durationMs = 30;
+  
+  if (delta > 0) {
+    pwm.setPWM(CH_WRIST_3, 0, FULL_CW);
+    delay(durationMs);
+  } else {
+    pwm.setPWM(CH_WRIST_3, 0, FULL_CCW);
+    delay(durationMs);
+  }
+  pwm.setPWM(CH_WRIST_3, 0, STOP_PULSE);
+  wrist3Angle = targetAngle;
+}
+
+void homeArm() {
+  currentArmState = STATE_BUSY;
+  setPositionalJoint(CH_WAIST, 90);
+  delay(100);
+  setPositionalJoint(CH_SHOULDER, 90);
+  delay(100);
+  setPositionalJoint(CH_ELBOW, 90);
+  delay(100);
+  setPositionalJoint(CH_WRIST_4, 90);
+  delay(100);
+  moveWrist3ToAngle(90);
+  currentArmState = STATE_DOCKED;
+}
+
+// BLOCK: Smoothly deploy card to screen position
+void executeBlock() {
+  if (currentArmState == STATE_BLOCKED) {
+    Serial.println(F("BLOCK_OK"));
+    return;
+  }
+  currentArmState = STATE_BUSY;
+
+  // 1. Gently close gripper on cardboard sheet
+  gripperClose();
+  delay(100);
+
+  // 2. Adjust base/waist to face forward (90°)
+  setPositionalJoint(CH_WAIST, 90);
+  delay(100);
+
+  // 3. Move shoulder and elbow sequentially to extend card toward screen
+  setPositionalJoint(CH_SHOULDER, 120);
+  delay(100);
+  setPositionalJoint(CH_ELBOW, 70);
+  delay(100);
+
+  // 4. Align wrist pitch so the card stands vertically upright in front of the screen
+  setPositionalJoint(CH_WRIST_4, 60);
+  delay(100);
+
+  currentArmState = STATE_BLOCKED;
+  Serial.println(F("BLOCK_OK"));
+}
+
+// RETRIEVE: Smoothly return arm with cardboard sheet to dock position
+void executeRetrieve() {
+  if (currentArmState == STATE_DOCKED) {
+    Serial.println(F("RETRIEVE_OK"));
+    return;
+  }
+  currentArmState = STATE_BUSY;
+
+  // 1. Tilt wrist back to safe travel angle
+  setPositionalJoint(CH_WRIST_4, 90);
+  delay(100);
+
+  // 2. Pull elbow and shoulder back sequentially to resting dock
+  setPositionalJoint(CH_ELBOW, 90);
+  delay(100);
+  setPositionalJoint(CH_SHOULDER, 90);
+  delay(100);
+
+  // 3. Center base
+  setPositionalJoint(CH_WAIST, 90);
+  delay(100);
+
+  currentArmState = STATE_DOCKED;
+  Serial.println(F("RETRIEVE_OK"));
+}
+
+void printStatus() {
+  switch (currentArmState) {
+    case STATE_DOCKED:  Serial.println(F("STATE_DOCKED")); break;
+    case STATE_BLOCKED: Serial.println(F("STATE_BLOCKED")); break;
+    case STATE_BUSY:    Serial.println(F("STATE_BUSY")); break;
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  while (!Serial && millis() < 2000) { ; }
+
+  Wire.begin();
+  delay(100);
+
+  pwm.begin();
+  pwm.setOscillatorFrequency(27000000);
+  pwm.setPWMFreq(SERVO_FREQ);
+
+  stopAllMotors();
+  currentArmState = STATE_DOCKED;
+
+  Serial.println(F("PostureGuard Firmware v1.0 Ready (115200 baud)."));
+}
+
+void loop() {
+  if (Serial.available() > 0) {
+    String input = Serial.readStringUntil('\n');
+    input.trim();
+    input.toUpperCase();
+
+    if (input.length() == 0) return;
+
+    // --- Official Protocol Commands ---
+    if (input == "BLOCK") {
+      executeBlock();
+    }
+    else if (input == "RETRIEVE") {
+      executeRetrieve();
+    }
+    else if (input == "STATUS") {
+      printStatus();
+    }
+    // --- Diagnostics / Direct Controls ---
+    else if (input == "HOME") {
+      homeArm();
+      Serial.println(F("HOME_OK"));
+    }
+    else if (input == "OPEN" || input == "O") {
+      gripperOpen();
+      Serial.println(F("OPEN_OK"));
+    }
+    else if (input == "CLOSE" || input == "C") {
+      gripperClose();
+      Serial.println(F("CLOSE_OK"));
+    }
+    else if (input == "STOP" || input == "OFF") {
+      stopAllMotors();
+      Serial.println(F("STOP_OK"));
+    }
+    else if (input.startsWith("SERVO 5 ")) {
+      int ang = input.substring(8).toInt();
+      moveGripperPositional(ang);
+      Serial.println(F("SERVO5_OK"));
+    }
+    else if (input.startsWith("PITCH ")) {
+      int ang = input.substring(6).toInt();
+      setWristPitch(ang);
+      Serial.println(F("PITCH_OK"));
+    }
+    else if (input.startsWith("WRIST3 ")) {
+      int ang = input.substring(7).toInt();
+      moveWrist3ToAngle(ang);
+      Serial.println(F("WRIST3_OK"));
+    }
+    else {
+      int spaceIdx = input.indexOf(' ');
+      if (spaceIdx > 0) {
+        int ch = input.substring(0, spaceIdx).toInt();
+        int val = input.substring(spaceIdx + 1).toInt();
+        if (ch == 5) {
+          moveGripperPositional(val);
+        } else if (ch == 3) {
+          moveWrist3ToAngle(val);
+        } else if (ch == 4) {
+          setWristPitch(val);
+        } else if (ch >= 0 && ch <= 2) {
+          setPositionalJoint(ch, val);
+        }
+        Serial.println(F("MOVE_OK"));
+      } else {
+        Serial.println(F("ERROR_UNKNOWN_COMMAND"));
+      }
+    }
+  }
+}
