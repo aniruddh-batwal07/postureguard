@@ -357,3 +357,41 @@ def test_run_loop_survives_forwarding_failure(capsys):
         assert "failed to forward event 'slouch_violation'" in capsys.readouterr().err
     finally:
         backend.close()
+
+
+def test_run_uses_preconfigured_baseline_from_active_session():
+    backend = MockBackend()
+    backend.active_session = {
+        "id": "configured-session",
+        "state": "active",
+        "baselineState": "configured",
+        "baseline": {
+            "head_forward": 0.20,
+            "head_drop": 0.15,
+            "shoulder_roll": 0.05,
+            "sample_count": 30,
+        },
+    }
+    try:
+        camera = FakeCamera()
+        # Slouched posture seen right from the start
+        detector = SequenceDetector(
+            [_landmarks(_SLOUCHED), _landmarks(_SLOUCHED), _landmarks(_SLOUCHED)]
+        )
+        clock = FakeMonotonic()
+        session_id = run(
+            Config(),
+            client_for(backend),
+            camera,
+            max_frames=4,
+            frame_delay=0,
+            detector=detector,
+            preview_enabled=False,
+            time_fn=clock,
+        )
+        assert session_id == "configured-session"
+        # Since baseline was already configured, NO baseline_captured event is needed;
+        # monitoring starts immediately and forwards slouch violation!
+        assert [e["type"] for e in backend.events] == [EVENT_SLOUCH_VIOLATION]
+    finally:
+        backend.close()

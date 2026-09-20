@@ -15,6 +15,8 @@ import { useSettings } from './hooks/useSettings';
 export default function App() {
   const {
     session,
+    savedBaseline,
+    clearSavedBaseline,
     loading: sessionLoading,
     busy: sessionBusy,
     baselineBusy,
@@ -93,10 +95,12 @@ export default function App() {
 
         <BaselineCard
           session={session}
+          savedBaseline={savedBaseline}
           busy={busy}
           error={baselineError}
           onCaptureBaseline={captureBaseline}
           onResetBaseline={resetBaseline}
+          onClearSavedBaseline={clearSavedBaseline}
         />
 
         <LiveMetrics

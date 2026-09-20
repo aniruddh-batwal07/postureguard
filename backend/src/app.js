@@ -13,6 +13,8 @@ const createSessionsRouter = require('./routes/sessions');
 const createEventsRouter = require('./routes/events');
 const createStatisticsRouter = require('./routes/statistics');
 const createSettingsRouter = require('./routes/settings');
+const createCvRouter = require('./routes/cv');
+const { createCvManager } = require('./cv/manager');
 
 function errorToResponse(err) {
   switch (err.code) {
@@ -29,7 +31,7 @@ function errorToResponse(err) {
   }
 }
 
-function createApp({ persistence = mongo, sessionService, eventService, statisticsService, settingsService, hardware } = {}) {
+function createApp({ persistence = mongo, sessionService, eventService, statisticsService, settingsService, hardware, cvManager = null } = {}) {
   const store = createSessionStore(persistence);
   const eventStore = createEventStore(persistence);
   const settingsStore = createSettingsStore(persistence);
@@ -65,10 +67,11 @@ function createApp({ persistence = mongo, sessionService, eventService, statisti
 
   app.use(express.json());
   app.use('/api', createStatusRouter(persistence));
-  app.use('/api', createSessionsRouter(sessions, statistics));
+  app.use('/api', createSessionsRouter(sessions, statistics, cvManager));
   app.use('/api', createEventsRouter(events));
   app.use('/api', createStatisticsRouter(statistics));
   app.use('/api', createSettingsRouter(settings));
+  app.use('/api', createCvRouter(cvManager));
 
   app.use((_req, res) => {
     res.status(404).json({ error: 'Not Found' });
@@ -125,12 +128,16 @@ async function startServer() {
     persistence = createInMemoryPersistence();
   }
 
-  const liveApp = createApp({ hardware, persistence });
+  const cvManager = createCvManager();
+  const liveApp = createApp({ hardware, persistence, cvManager });
   const server = liveApp.listen(config.port, config.host, () => {
     console.log(`postureguard-backend listening on http://${config.host}:${config.port}`);
   });
 
   async function shutdown() {
+    if (cvManager) {
+      await cvManager.stop().catch(() => {});
+    }
     server.close(async () => {
       if (transport) {
         await transport.close().catch(() => {});

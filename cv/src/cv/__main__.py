@@ -172,6 +172,25 @@ def _log_rule_params(threshold: float, slouch_dur: float, correction_dur: float)
     )
 
 
+def _parse_baseline_from_session(raw_baseline: Any) -> PostureBaseline | None:
+    """Extract a valid PostureBaseline from session dictionary if available."""
+    if not isinstance(raw_baseline, dict):
+        return None
+    try:
+        hf = float(raw_baseline.get("head_forward", raw_baseline.get("headForward", 0.0)))
+        hd = float(raw_baseline.get("head_drop", raw_baseline.get("headDrop", 0.0)))
+        sr = float(raw_baseline.get("shoulder_roll", raw_baseline.get("shoulderRoll", 0.0)))
+        count = int(raw_baseline.get("sample_count", raw_baseline.get("sampleCount", 30)))
+        return PostureBaseline(
+            head_forward=hf,
+            head_drop=hd,
+            shoulder_roll=sr,
+            sample_count=count,
+        )
+    except Exception:
+        return None
+
+
 def run(
     config: Config,
     client: EventClient,
@@ -233,16 +252,32 @@ def run(
 
         if detector is not None:
             detector.initialize()
-            baseline_result = capture_baseline_for_rule(
-                camera,
-                detector,
-                baseline_min_samples,
-                baseline_max_seconds,
-                preview=preview,
-            )
-            # Baseline captured: notify backend
-            print("[cv] Upright baseline captured! Starting slouch monitoring...", flush=True)
-            session_id = forward_rule_event(client, EVENT_BASELINE_CAPTURED, session_id, data=baseline_result.to_dict())
+            configured_baseline = None
+            if session.get("baselineState") == "configured" and session.get("baseline"):
+                configured_baseline = _parse_baseline_from_session(session.get("baseline"))
+
+            if configured_baseline is not None:
+                baseline_result = configured_baseline
+                print(
+                    f"[cv] Using pre-configured baseline: "
+                    f"head_forward={baseline_result.head_forward:.2f} "
+                    f"head_drop={baseline_result.head_drop:.2f} "
+                    f"shoulder_roll={baseline_result.shoulder_roll:.2f} "
+                    f"({baseline_result.sample_count} samples)",
+                    flush=True,
+                )
+            else:
+                baseline_result = capture_baseline_for_rule(
+                    camera,
+                    detector,
+                    baseline_min_samples,
+                    baseline_max_seconds,
+                    preview=preview,
+                )
+                # Baseline captured: notify backend
+                print("[cv] Upright baseline captured! Starting slouch monitoring...", flush=True)
+                session_id = forward_rule_event(client, EVENT_BASELINE_CAPTURED, session_id, data=baseline_result.to_dict())
+
             print("[cv] Arm confirmed at base position. Starting slouch monitoring...", flush=True)
             if hasattr(camera, "_capture") and camera._capture is not None:
                 for _ in range(5):
@@ -305,6 +340,37 @@ def run(
                         "[cv] rule updated with new settings",
                         flush=True,
                     )
+
+            # Periodically (every 20 frames, ~1s) verify active session status and handle dashboard recalibration
+            if frames > 0 and frames % 20 == 0:
+                try:
+                    active_sess_data = client.request("GET", "/api/sessions/active").get("session")
+                    if active_sess_data is None or str(active_sess_data.get("id")) != session_id or active_sess_data.get("state") == "ended":
+                        print(f"[cv] active session {session_id} ended or changed; stopping cv pipeline", flush=True)
+                        break
+
+                    if active_sess_data.get("baselineState") == "capturing" and detector is not None:
+                        print("[cv] recalibration requested from dashboard! Capturing new baseline...", flush=True)
+                        baseline_result = capture_baseline_for_rule(
+                            camera,
+                            detector,
+                            baseline_min_samples,
+                            baseline_max_seconds,
+                            preview=preview,
+                        )
+                        session_id = forward_rule_event(
+                            client,
+                            EVENT_BASELINE_CAPTURED,
+                            session_id,
+                            data=baseline_result.to_dict(),
+                        )
+                        if settings_poller is not None:
+                            rule = _build_rule_from_settings(baseline_result, settings_poller.current_settings)
+                        else:
+                            rule = _build_rule_from_config(baseline_result, config)
+                        print("[cv] new baseline established and active!", flush=True)
+                except Exception:
+                    pass
 
             landmarks = None
             if rule is not None:

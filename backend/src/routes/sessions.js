@@ -16,13 +16,19 @@ function toApiSession(session) {
   };
 }
 
-function createSessionsRouter(service, statisticsService = null) {
+function createSessionsRouter(service, statisticsService = null, cvManager = null) {
   const router = express.Router();
 
   router.post('/sessions', async (req, res, next) => {
     try {
       const friendlyName = req.body && typeof req.body.friendlyName === 'string' ? req.body.friendlyName : undefined;
-      const session = await service.createSession({ friendlyName });
+      const baseline = req.body && req.body.baseline && typeof req.body.baseline === 'object' ? req.body.baseline : undefined;
+      const session = await service.createSession({ friendlyName, baseline });
+      if (cvManager && typeof cvManager.start === 'function') {
+        cvManager.start().catch((err) => {
+          console.warn(`[cv-manager] auto-start failed: ${err.message}`);
+        });
+      }
       res.status(201).json({ session: toApiSession(session) });
     } catch (err) {
       next(err);
@@ -110,6 +116,20 @@ function createSessionsRouter(service, statisticsService = null) {
     }
   });
 
+  router.post('/sessions/active/baseline', async (req, res, next) => {
+    try {
+      const active = await service.getActiveSession();
+      if (!active) {
+        return res.status(404).json({ error: 'no active session' });
+      }
+      const baseline = req.body && req.body.baseline ? req.body.baseline : req.body;
+      const session = await service.markBaselineCaptured(active.sessionId, baseline);
+      res.json({ session: toApiSession(session) });
+    } catch (err) {
+      next(err);
+    }
+  });
+
   router.post('/sessions/:id/end', async (req, res, next) => {
     const { id } = req.params;
     if (!SESSION_ID_PATTERN.test(id)) {
@@ -117,6 +137,11 @@ function createSessionsRouter(service, statisticsService = null) {
     }
     try {
       const session = await service.endSession(id);
+      if (cvManager && typeof cvManager.stop === 'function') {
+        cvManager.stop().catch((err) => {
+          console.warn(`[cv-manager] auto-stop failed: ${err.message}`);
+        });
+      }
       res.json({ session: toApiSession(session) });
     } catch (err) {
       next(err);

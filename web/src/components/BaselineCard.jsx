@@ -1,11 +1,17 @@
 import React from 'react';
 
+function formatVal(v) {
+  return typeof v === 'number' ? v.toFixed(2) : 'N/A';
+}
+
 export default function BaselineCard({
   session,
+  savedBaseline,
   busy,
   error,
   onCaptureBaseline,
   onResetBaseline,
+  onClearSavedBaseline,
 }) {
   const active = Boolean(session && session.state !== 'ended');
   const baselineState = session?.baselineState || 'unconfigured';
@@ -48,8 +54,27 @@ export default function BaselineCard({
           <div className="instruction-box success-box">
             <p className="instruction-title">Upright Baseline Established</p>
             <p className="instruction-text">
-              PostureGuard is continuously evaluating live posture against your established reference. Click <strong>Reset Baseline</strong> if you shift posture or change seating position.
+              PostureGuard is continuously evaluating live posture against your established reference. Click <strong>Capture Posture Baseline</strong> anytime to recalibrate, or <strong>Reset Baseline</strong> if you shift posture or change seating position.
             </p>
+          </div>
+        )}
+
+        {savedBaseline && (
+          <div className="instruction-box info-box" style={{ marginTop: '0.75rem' }}>
+            <p className="instruction-title">💾 Stored Local Baseline</p>
+            <p className="instruction-text" style={{ fontSize: '0.85rem' }}>
+              Stored in browser storage (Head Forward: {formatVal(savedBaseline.head_forward ?? savedBaseline.headForward)}, Head Drop: {formatVal(savedBaseline.head_drop ?? savedBaseline.headDrop)}, Shoulder: {formatVal(savedBaseline.shoulder_roll ?? savedBaseline.shoulderRoll)}). New sessions will start immediately with this reference.
+            </p>
+            {onClearSavedBaseline && (
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={onClearSavedBaseline}
+                style={{ marginTop: '0.5rem', fontSize: '0.8rem', padding: '0.25rem 0.5rem' }}
+              >
+                Clear Saved Baseline
+              </button>
+            )}
           </div>
         )}
 
@@ -57,10 +82,15 @@ export default function BaselineCard({
           <button
             type="button"
             className="btn btn-primary"
+            aria-label="Capture Posture Baseline"
             onClick={onCaptureBaseline}
             disabled={!active || busy || baselineState === 'capturing'}
           >
-            {baselineState === 'capturing' ? 'Capturing Baseline…' : 'Capture Posture Baseline'}
+            {baselineState === 'capturing'
+              ? 'Capturing Baseline…'
+              : baselineState === 'configured'
+              ? 'Capture Posture Baseline (Recalibrate)'
+              : 'Capture Posture Baseline'}
           </button>
           <button
             type="button"

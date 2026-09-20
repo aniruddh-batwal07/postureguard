@@ -40,7 +40,7 @@ function formatFriendlySessionName(timestamp) {
 }
 
 function createSessionService({ store, hardware, now = () => new Date() }) {
-  async function createSession({ friendlyName } = {}) {
+  async function createSession({ friendlyName, baseline } = {}) {
     const active = await store.findActive();
     if (active) {
       throw new ActiveSessionExistsError('an active session already exists');
@@ -49,12 +49,13 @@ function createSessionService({ store, hardware, now = () => new Date() }) {
     const name = typeof friendlyName === 'string' && friendlyName.trim().length > 0
       ? friendlyName.trim()
       : formatFriendlySessionName(timestamp);
+    const hasBaseline = Boolean(baseline && typeof baseline === 'object');
     const session = {
       sessionId: randomUUID(),
       friendlyName: name,
       state: 'monitoring',
-      baselineState: 'unconfigured',
-      baseline: null,
+      baselineState: hasBaseline ? 'configured' : 'unconfigured',
+      baseline: hasBaseline ? baseline : null,
       createdAt: timestamp,
       updatedAt: timestamp,
       endedAt: null,

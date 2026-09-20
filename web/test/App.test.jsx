@@ -238,6 +238,46 @@ describe('Baseline Management', () => {
       expect(screen.getByRole('alert')).toHaveTextContent('Baseline error: webcam busy'),
     );
   });
+
+  it('uses stored baseline from localStorage when starting a session', async () => {
+    const saved = { head_forward: 0.22, head_drop: 0.15, shoulder_roll: 0.05, sample_count: 30 };
+    localStorage.setItem('postureguard_saved_baseline', JSON.stringify(saved));
+
+    const created = session({ state: 'active', baselineState: 'configured', baseline: saved });
+    api.getActiveSession.mockResolvedValueOnce(null).mockResolvedValueOnce(created);
+    api.createSession.mockResolvedValue(created);
+
+    render(<App />);
+
+    const start = screen.getByRole('button', { name: 'Start Session' });
+    await waitFor(() => expect(start).toBeEnabled());
+    await userEvent.click(start);
+
+    await waitFor(() => {
+      expect(api.createSession).toHaveBeenCalledWith({
+        friendlyName: undefined,
+        baseline: expect.objectContaining({ head_forward: 0.22 }),
+      });
+    });
+
+    localStorage.removeItem('postureguard_saved_baseline');
+  });
+
+  it('persists configured baseline to localStorage and renders stored baseline box', async () => {
+    const saved = { head_forward: 0.18, head_drop: 0.12, shoulder_roll: 0.04, sample_count: 30 };
+    const configuredSess = session({ baselineState: 'configured', baseline: saved });
+    api.getActiveSession.mockResolvedValue(configuredSess);
+
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByText(/Stored Local Baseline/i)).toBeInTheDocument());
+    expect(screen.getByRole('button', { name: /Clear Saved Baseline/i })).toBeInTheDocument();
+    expect(localStorage.getItem('postureguard_saved_baseline')).toContain('0.18');
+
+    // Clicking clear removes it from localStorage
+    await userEvent.click(screen.getByRole('button', { name: /Clear Saved Baseline/i }));
+    expect(localStorage.getItem('postureguard_saved_baseline')).toBeNull();
+  });
 });
 
 describe('App session states & blocking', () => {
