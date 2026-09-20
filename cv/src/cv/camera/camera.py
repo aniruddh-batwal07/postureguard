@@ -15,33 +15,38 @@ class CameraError(RuntimeError):
 
 
 def _open_capture(index: int) -> cv2.VideoCapture:
-    # On Windows the default MSMF backend (cap_msmf.cpp) raises
-    # MF_E_VIDEO_RECORDING_DEVICE_INVALIDATED (-1072875772) after rapid
-    # open/close cycles, making read() return ok=False even though
-    # isOpened() returns True. DirectShow (CAP_DSHOW) or CAP_ANY are used.
-    # We probe the requested index first, and fall back to working indices (e.g. index 2).
+    # On Windows 10/11, modern integrated laptop webcams use Media Foundation (MSMF).
+    # Virtual camera software (such as OBS Virtual Camera or DroidCam) often take
+    # DirectShow indices. We probe MSMF first to prioritize the physical hardware camera,
+    # then fallback to DSHOW and CAP_ANY on requested and primary indices.
     import sys
     if sys.platform == "win32":
         candidates = [
+            (index, cv2.CAP_MSMF),
             (index, cv2.CAP_DSHOW),
             (index, cv2.CAP_ANY),
-            (2, cv2.CAP_ANY),
+            (0, cv2.CAP_MSMF),
+            (0, cv2.CAP_DSHOW),
             (0, cv2.CAP_ANY),
+            (1, cv2.CAP_MSMF),
+            (1, cv2.CAP_DSHOW),
             (1, cv2.CAP_ANY),
         ]
-        # Eliminate duplicates while preserving order
         seen = set()
         for idx, backend in candidates:
             if (idx, backend) in seen:
                 continue
             seen.add((idx, backend))
-            cap = cv2.VideoCapture(idx, backend)
-            if cap.isOpened():
-                ok, test_frame = cap.read()
-                if ok and test_frame is not None:
-                    return cap
-                cap.release()
-        return cv2.VideoCapture(index, cv2.CAP_DSHOW)
+            try:
+                cap = cv2.VideoCapture(idx, backend)
+                if cap.isOpened():
+                    ok, test_frame = cap.read()
+                    if ok and test_frame is not None:
+                        return cap
+                    cap.release()
+            except Exception:
+                pass
+        return cv2.VideoCapture(index, cv2.CAP_MSMF)
     return cv2.VideoCapture(index)
 
 
