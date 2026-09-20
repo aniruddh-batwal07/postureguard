@@ -41,6 +41,14 @@ function createHardwareService({ transport, commandTimeoutMs = config.hardwareCo
   }
 
   async function request(command) {
+    // Drop stale unread device lines so this command can only ever match its
+    // own acknowledgement. Without this, a late ack from a previously
+    // timed-out command (or a boot banner arriving after the boot-delay
+    // window) desynchronizes the read loop and the real command gets
+    // rejected as a protocol error — the "arm sometimes doesn't act" bug.
+    if (typeof transport.flushInput === 'function') {
+      transport.flushInput();
+    }
     await transport.writeLine(command);
     const deadline = now() + commandTimeoutMs;
     for (;;) {

@@ -20,7 +20,7 @@ def _utc_now() -> str:
 class EventClient:
     """Posts events to ``POST /api/events`` (see architecture.md §4.2)."""
 
-    def __init__(self, base_url: str, timeout: float = 5.0) -> None:
+    def __init__(self, base_url: str, timeout: float = 45.0) -> None:
         self._base_url = base_url.rstrip("/")
         self._timeout = timeout
 
@@ -42,7 +42,12 @@ class EventClient:
             headers["Content-Type"] = "application/json"
         req = urllib.request.Request(url, data=body, headers=headers, method=method)
         try:
-            with urllib.request.urlopen(req, timeout=self._timeout) as resp:
+            if "127.0.0.1" in self._base_url or "localhost" in self._base_url:
+                opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+                resp_cm = opener.open(req, timeout=self._timeout)
+            else:
+                resp_cm = urllib.request.urlopen(req, timeout=self._timeout)
+            with resp_cm as resp:
                 data = resp.read()
                 return json.loads(data) if data else {}
         except urllib.error.HTTPError as err:

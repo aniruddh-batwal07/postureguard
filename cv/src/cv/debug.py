@@ -54,26 +54,37 @@ class PreviewRenderer:
         frame: Any,
         landmarks: PoseLandmarks | None = None,
         status: str | None = None,
-    ) -> None:
-        """Draw one annotated frame to the preview window."""
+    ) -> int | None:
+        """Draw one annotated frame to the preview window. Returns key code if key pressed."""
         if not self._enabled or frame is None:
-            return
-        annotated = frame.copy()
-        if landmarks is not None:
-            self._draw_landmarks(annotated, landmarks)
-        if status:
-            cv2.putText(
-                annotated,
-                status,
-                (8, 26),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                _TEXT_COLOR,
-                2,
-                cv2.LINE_AA,
-            )
-        self._show(self._window_name, annotated)
-        self._poll(1)
+            return None
+        try:
+            if hasattr(cv2, "getWindowProperty") and hasattr(cv2, "WND_PROP_VISIBLE"):
+                prop = cv2.getWindowProperty(self._window_name, cv2.WND_PROP_VISIBLE)
+                if prop < 0:
+                    self.close()
+                    return None
+
+            annotated = frame.copy()
+            if landmarks is not None:
+                self._draw_landmarks(annotated, landmarks)
+            if status:
+                cv2.putText(
+                    annotated,
+                    status,
+                    (8, 26),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    _TEXT_COLOR,
+                    2,
+                    cv2.LINE_AA,
+                )
+            self._show(self._window_name, annotated)
+            key = self._poll(1)
+            return key if key != -1 else None
+        except Exception:
+            self._enabled = False
+            return None
 
     def close(self) -> None:
         """Destroy the preview window. Safe to call multiple times."""

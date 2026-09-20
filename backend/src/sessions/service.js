@@ -32,6 +32,16 @@ function createSessionService({ store, hardware, now = () => new Date() }) {
     if (active) {
       throw new ActiveSessionExistsError('an active session already exists');
     }
+    // Session-start safety (v1.3): whichever way the previous session ended —
+    // or if the arm was reset/moved — bring it back to the resting home dock
+    // before any further actions. Fire-and-forget so session creation never
+    // blocks; the hardware FIFO serializes this ahead of any later
+    // BLOCK/RETRIEVE, and the firmware acks instantly when already docked.
+    if (hardware) {
+      hardware.retrieve().catch((err) => {
+        console.warn(`[session] startup homing failed: ${err.message}`);
+      });
+    }
     const timestamp = now();
     const session = {
       sessionId: randomUUID(),
@@ -47,18 +57,22 @@ function createSessionService({ store, hardware, now = () => new Date() }) {
     return store.findActive();
   }
 
-  // Baseline capture completion (M4.2): the CV signals a successful upright
-  // baseline via the `baseline_captured` event; the backend — authoritative for
-  // session state — moves the session from `baseline_capturing` to
-  // `monitoring`. A duplicate or out-of-order event raises
-  // INVALID_TRANSITION (swallowed as benign by the events layer) so capture is
-  // never restarted and state is never regressed. Independent of hardware.
+  // Baseline capture completion: when CV signals that baseline samples have been
+  // captured, the arm returns to base position first, and the backend moves the
+  // session from `baseline_capturing` to `monitoring`.
   async function markBaselineCaptured(sessionId) {
     const session = await store.findBySessionId(sessionId);
     if (!session) {
       throw new SessionNotFoundError(`session ${sessionId} not found`);
     }
     assertState(session, 'monitoring');
+    if (hardware) {
+      try {
+        await hardware.retrieve();
+      } catch (err) {
+        console.error(`[session] baseline return to base failed for session ${sessionId}: ${err.message}`);
+      }
+    }
     return store.updateState(sessionId, { state: 'monitoring', updatedAt: now() });
   }
 

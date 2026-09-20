@@ -3,10 +3,22 @@
 from __future__ import annotations
 
 import argparse
+import os
 import signal
 import sys
 import time
 from typing import Any, Callable
+
+if sys.platform == "win32":
+    local_temp = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".tmp"))
+    os.makedirs(local_temp, exist_ok=True)
+    os.environ.setdefault("MPLCONFIGDIR", os.path.join(local_temp, "matplotlib"))
+    os.environ.setdefault("TEMP", local_temp)
+    os.environ.setdefault("TMP", local_temp)
+
+_src_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if _src_dir not in sys.path:
+    sys.path.insert(0, _src_dir)
 
 from cv import __version__
 from cv.camera import Camera, CameraError
@@ -18,6 +30,8 @@ from cv.pose import (
     PoseDetectionError,
     PoseDetector,
     PostureBaseline,
+    PostureMeasurement,
+    calculate_deviation,
     capture_baseline,
     extract_posture_measurement,
 )
@@ -33,12 +47,20 @@ class _StopRequested(Exception):
     pass
 
 
-def resolve_active_session(client: EventClient) -> dict[str, Any]:
+def resolve_active_session(client: EventClient, timeout_seconds: float = 30.0) -> dict[str, Any]:
     """Return the backend's active session, creating one if none exists."""
-    session = client.request("GET", "/api/sessions/active").get("session")
-    if session is None:
-        session = client.request("POST", "/api/sessions")["session"]
-    return session
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        try:
+            session = client.request("GET", "/api/sessions/active").get("session")
+            if session is None:
+                session = client.request("POST", "/api/sessions")["session"]
+            return session
+        except EventClientError:
+            if time.monotonic() >= deadline:
+                raise
+            print(f"[cv] Waiting for backend at {client.base_url} to be ready...", flush=True)
+            time.sleep(1.0)
 
 
 def report_baseline_progress(collected: int, required: int) -> None:
@@ -46,21 +68,34 @@ def report_baseline_progress(collected: int, required: int) -> None:
     print(f"[cv] Baseline: {collected}/{required} valid samples", flush=True)
 
 
-def forward_rule_event(client: EventClient, event: str, session_id: str) -> None:
+def forward_rule_event(client: EventClient, event: str, session_id: str) -> str:
     """Forward one rule event to the backend.
 
     A backend/network failure is logged to stderr and swallowed so a transient
     outage never crashes the capture loop (M3.1 reliability requirement).
+    Returns the active session ID (re-resolved if stale).
     """
     try:
         client.send_event(event, session_id)
         print(f"[cv] event sent: {event}", flush=True)
+        return session_id
     except EventClientError as err:
         print(
             f"[cv] failed to forward event '{event}': {err}",
             file=sys.stderr,
             flush=True,
         )
+        try:
+            active = resolve_active_session(client)
+            new_id = str(active["id"])
+            if new_id != session_id:
+                print(f"[cv] switching to new active session {new_id}", flush=True)
+                client.send_event(event, new_id)
+                print(f"[cv] event sent: {event}", flush=True)
+                return new_id
+        except Exception:
+            pass
+        return session_id
 
 
 def capture_baseline_for_rule(
@@ -200,9 +235,16 @@ def run(
                 baseline_max_seconds,
                 preview=preview,
             )
-            # Only a successful baseline reaches the backend; a failed/timeout
-            # capture raises above and never moves the session to monitoring.
-            forward_rule_event(client, EVENT_BASELINE_CAPTURED, session_id)
+            # Baseline captured: notify backend and ensure arm returns to base
+            print("[cv] Upright baseline captured! Returning robotic arm to base position...", flush=True)
+            session_id = forward_rule_event(client, EVENT_BASELINE_CAPTURED, session_id)
+            print("[cv] Arm confirmed at base position. Starting slouch monitoring...", flush=True)
+            if hasattr(camera, "_capture") and camera._capture is not None:
+                for _ in range(5):
+                    try:
+                        camera._capture.grab()
+                    except Exception:
+                        break
 
             if settings_poller is not None:
                 live = settings_poller.current_settings
@@ -218,8 +260,36 @@ def run(
             print(f"[cv] no pose detector; monitoring disabled for session {session_id}", flush=True)
 
         frames = 0
+        consecutive_cam_errors = 0
+        consecutive_dropped_frames = 0
+        consecutive_glitch_frames = 0
+        last_valid_measurement = None
+        last_slouch_measurement = None
+        last_good_measurement = None
         while max_frames is None or frames < max_frames:
-            frame = camera.read()
+            try:
+                frame = camera.read()
+                consecutive_cam_errors = 0
+            except CameraError:
+                consecutive_cam_errors += 1
+                if consecutive_cam_errors % 10 == 0:
+                    print(
+                        f"[cv] camera read error ({consecutive_cam_errors} consecutive), attempting reconnect...",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    try:
+                        camera.release()
+                        time.sleep(0.3)
+                        camera.open()
+                        print("[cv] camera successfully reconnected", flush=True)
+                        consecutive_cam_errors = 0
+                    except Exception as rec_err:
+                        print(f"[cv] camera reconnect failed: {rec_err}", file=sys.stderr, flush=True)
+                if consecutive_cam_errors > 60:
+                    raise
+                time.sleep(frame_delay)
+                continue
 
             # M3.3: poll for settings updates on each frame; rebuild rule when changed.
             if settings_poller is not None and baseline_result is not None and rule is not None:
@@ -231,13 +301,108 @@ def run(
                         flush=True,
                     )
 
+            landmarks = None
             if rule is not None:
-                landmarks = detector.detect(frame)
-                measurement = (
-                    extract_posture_measurement(landmarks) if landmarks is not None else None
+                try:
+                    landmarks = detector.detect(frame)
+                    raw_measurement = (
+                        extract_posture_measurement(landmarks) if landmarks is not None else None
+                    )
+                    if raw_measurement is not None:
+                        consecutive_dropped_frames = 0
+                        last_valid_measurement = raw_measurement
+                        candidate_measurement = raw_measurement
+                    else:
+                        consecutive_dropped_frames += 1
+                        # Tolerate up to 10 momentary dropped frames (~500ms) before declaring unknown
+                        if consecutive_dropped_frames <= 10 and last_valid_measurement is not None:
+                            candidate_measurement = last_valid_measurement
+                        else:
+                            candidate_measurement = None
+
+                    # Glitch suppression: prevent single-frame landmark coordinate jitter from
+                    # resetting an active sustained slouch or correction countdown.
+                    measurement = candidate_measurement
+                    if candidate_measurement is not None:
+                        dev = calculate_deviation(candidate_measurement, rule.baseline)
+                        is_bad = dev.magnitude() > rule.slouch_threshold
+
+                        # Active slouch countdown: user is slouching, waiting for 2.0s trigger
+                        if not rule.slouch_active and rule.slouch_since is not None:
+                            if is_bad:
+                                consecutive_glitch_frames = 0
+                                last_slouch_measurement = candidate_measurement
+                                measurement = candidate_measurement
+                            else:
+                                if consecutive_glitch_frames < 2 and last_slouch_measurement is not None:
+                                    consecutive_glitch_frames += 1
+                                    measurement = last_slouch_measurement
+                                else:
+                                    consecutive_glitch_frames = 0
+                                    measurement = candidate_measurement
+
+                        # Active correction countdown: screen is blocked, user is holding good posture
+                        elif rule.slouch_active and rule.correction_since is not None:
+                            if not is_bad:
+                                consecutive_glitch_frames = 0
+                                last_good_measurement = candidate_measurement
+                                measurement = candidate_measurement
+                            else:
+                                if consecutive_glitch_frames < 2 and last_good_measurement is not None:
+                                    consecutive_glitch_frames += 1
+                                    measurement = last_good_measurement
+                                else:
+                                    consecutive_glitch_frames = 0
+                                    measurement = candidate_measurement
+
+                        # Steady state or initial sample
+                        else:
+                            consecutive_glitch_frames = 0
+                            if is_bad:
+                                last_slouch_measurement = candidate_measurement
+                            else:
+                                last_good_measurement = candidate_measurement
+                            measurement = candidate_measurement
+                    else:
+                        consecutive_glitch_frames = 0
+
+                    for event in rule.update(measurement, time_fn()):
+                        session_id = forward_rule_event(client, event, session_id)
+                        consecutive_glitch_frames = 0
+                        last_valid_measurement = None
+                        last_slouch_measurement = None
+                        last_good_measurement = None
+                        if hasattr(camera, "_capture") and camera._capture is not None:
+                            for _ in range(5):
+                                try:
+                                    camera._capture.grab()
+                                except Exception:
+                                    break
+                except Exception as err:
+                    print(f"[cv] warning: error in frame processing: {err}", file=sys.stderr, flush=True)
+
+            if preview is not None and preview.enabled:
+                cond = rule.condition if rule is not None else "monitoring"
+                status_text = f"Posture: {cond.upper()}"
+                if rule and rule.slouch_active:
+                    if rule.correction_since is not None:
+                        elapsed = time_fn() - rule.correction_since
+                        status_text = f"Correcting Posture: {elapsed:.1f}s / {rule.correction_duration_seconds:.1f}s"
+                    else:
+                        status_text = "SLOUCH DETECTED - ARM BLOCKED"
+                elif rule and rule.slouch_since is not None:
+                    elapsed = time_fn() - rule.slouch_since
+                    status_text = f"Slouching: {elapsed:.1f}s / {rule.slouch_duration_seconds:.1f}s"
+
+                key = preview.render(
+                    frame,
+                    landmarks=landmarks,
+                    status=status_text,
                 )
-                for event in rule.update(measurement, time_fn()):
-                    forward_rule_event(client, event, session_id)
+                if key is not None and (key & 0xFF) in (ord("q"), ord("Q"), 27):
+                    print("[cv] user requested exit from preview window", flush=True)
+                    raise _StopRequested()
+
             frames += 1
             time.sleep(frame_delay)
     except _StopRequested:
@@ -268,15 +433,15 @@ def main() -> int:
     parser.add_argument(
         "--max-seconds",
         type=float,
-        default=5.0,
-        help="baseline capture timeout in seconds (default: 5.0)",
+        default=20.0,
+        help="baseline capture timeout in seconds (default: 20.0)",
     )
     args = parser.parse_args()
 
     config = Config.from_env()
     client = EventClient(config.backend_url)
     camera = Camera(config.camera_index)
-    detector = PoseDetector()
+    detector = PoseDetector(landmark_visibility_threshold=0.35)
 
     # M3.3: create a poller using config defaults as the initial settings so the
     # service starts monitoring even if the backend is temporarily unavailable.
@@ -295,31 +460,59 @@ def main() -> int:
     signal.signal(signal.SIGINT, _on_signal)
     signal.signal(signal.SIGTERM, _on_signal)
 
+    max_baseline_retries = 3
     try:
-        run(
-            config,
-            client,
-            camera,
-            detector=detector,
-            baseline_min_samples=args.min_samples,
-            baseline_max_seconds=args.max_seconds,
-            preview_enabled=not args.no_preview,
-            settings_poller=settings_poller,
-        )
-    except _StopRequested:
-        pass
-    except CameraError as err:
-        print(f"[cv] camera error: {err}", file=sys.stderr, flush=True)
-        return 1
-    except EventClientError as err:
-        print(f"[cv] backend error: {err}", file=sys.stderr, flush=True)
-        return 2
-    except (BaselineCaptureError, PoseDetectionError) as err:
-        print(f"[cv] baseline/vision error: {err}", file=sys.stderr, flush=True)
-        return 3
-    except KeyError as err:
-        print(f"[cv] backend error: missing key {err}", file=sys.stderr, flush=True)
-        return 2
+        for attempt in range(max_baseline_retries):
+            try:
+                run(
+                    config,
+                    client,
+                    camera,
+                    detector=detector,
+                    baseline_min_samples=args.min_samples,
+                    baseline_max_seconds=args.max_seconds,
+                    preview_enabled=not args.no_preview,
+                    settings_poller=settings_poller,
+                )
+                break
+            except _StopRequested:
+                break
+            except BaselineCaptureError as err:
+                if attempt < max_baseline_retries - 1:
+                    print(
+                        f"\n[cv] Baseline capture timed out ({err}).\n"
+                        f"[cv] Retrying baseline ({attempt + 2}/{max_baseline_retries})... Please sit upright and ensure your head and shoulders are visible to the webcam.\n",
+                        flush=True,
+                    )
+                    time.sleep(2.0)
+                else:
+                    print(f"[cv] baseline/vision error: {err}", file=sys.stderr, flush=True)
+                    return 3
+            except CameraError as err:
+                if attempt < max_baseline_retries - 1:
+                    print(f"[cv] camera error ({err}), retrying in 2 seconds...", file=sys.stderr, flush=True)
+                    time.sleep(2.0)
+                else:
+                    print(f"[cv] camera error: {err}", file=sys.stderr, flush=True)
+                    return 1
+            except EventClientError as err:
+                if attempt < max_baseline_retries - 1:
+                    print(f"[cv] backend error ({err}), retrying in 2 seconds...", file=sys.stderr, flush=True)
+                    time.sleep(2.0)
+                else:
+                    print(f"[cv] backend error: {err}", file=sys.stderr, flush=True)
+                    return 2
+            except PoseDetectionError as err:
+                print(f"[cv] baseline/vision error: {err}", file=sys.stderr, flush=True)
+                return 3
+            except KeyError as err:
+                print(f"[cv] backend error: missing key {err}", file=sys.stderr, flush=True)
+                return 2
+            except Exception as err:
+                print(f"[cv] unexpected error: {err}", file=sys.stderr, flush=True)
+                import traceback
+                traceback.print_exc()
+                return 1
     finally:
         detector.close()
         camera.release()

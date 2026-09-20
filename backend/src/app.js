@@ -53,6 +53,16 @@ function createApp({ persistence = mongo, sessionService, eventService, statisti
 
   const app = express();
 
+  app.use((req, res, next) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    if (req.method === 'OPTIONS') {
+      return res.sendStatus(204);
+    }
+    next();
+  });
+
   app.use(express.json());
   app.use('/api', createStatusRouter(persistence));
   app.use('/api', createSessionsRouter(sessions));
@@ -81,24 +91,63 @@ function createApp({ persistence = mongo, sessionService, eventService, statisti
 
 const app = createApp();
 
-if (require.main === module) {
-  const server = app.listen(config.port, config.host, () => {
+async function startServer() {
+  let hardware = null;
+  let transport = null;
+
+  if (process.env.ENABLE_HARDWARE !== 'false') {
+    const { createSerialTransport } = require('./hardware/transport');
+    const { createHardwareService } = require('./hardware/service');
+    const targetPort = config.serialPort;
+    transport = createSerialTransport({ path: targetPort });
+    hardware = createHardwareService({ transport, commandTimeoutMs: config.hardwareCommandTimeoutMs });
+    try {
+      console.log(`[hardware] attempting connection on ${targetPort}...`);
+      await transport.open();
+      const currentStatus = await hardware.status().catch(() => ({ state: 'unknown' }));
+      console.log(`[hardware] Arduino connected on ${targetPort} (status: ${currentStatus.state})`);
+      // Initial homing to ensure arm is at dock/base position upon startup
+      await hardware.retrieve().catch((err) => {
+        console.warn(`[hardware] initial homing on startup: ${err.message}`);
+      });
+    } catch (hwErr) {
+      console.warn(`[hardware] Arduino not yet connected on ${targetPort} (${hwErr.message}). Ready to auto-connect on demand when plugged in.`);
+    }
+  }
+
+  let persistence = mongo;
+  try {
+    await mongo.connect({ serverSelectionTimeoutMS: 2000 });
+    console.log(`[mongo] connected to ${config.mongoUri}`);
+  } catch (err) {
+    console.warn(`[mongo] MongoDB unavailable at ${config.mongoUri} (${err.message}). Using in-memory persistence fallback.`);
+    const { createInMemoryPersistence } = require('./persistence/in-memory');
+    persistence = createInMemoryPersistence();
+  }
+
+  const liveApp = createApp({ hardware, persistence });
+  const server = liveApp.listen(config.port, config.host, () => {
     console.log(`postureguard-backend listening on http://${config.host}:${config.port}`);
   });
 
-  mongo.connect().then(
-    () => console.log(`[mongo] connected to ${config.mongoUri}`),
-    (err) => console.error(`[mongo] initial connection failed (${config.mongoUri}): ${err.message}`),
-  );
-
   async function shutdown() {
     server.close(async () => {
-      await mongo.disconnect().catch(() => {});
+      if (transport) {
+        await transport.close().catch(() => {});
+      }
+      await persistence.disconnect().catch(() => {});
       process.exit(0);
     });
   }
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
+}
+
+if (require.main === module) {
+  startServer().catch((err) => {
+    console.error('[app] startup failed:', err);
+    process.exit(1);
+  });
 }
 
 module.exports = app;

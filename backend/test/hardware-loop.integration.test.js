@@ -90,27 +90,29 @@ test('real session flow: create → baseline_captured → monitoring → violati
   const created = await request(app).post('/api/sessions').expect(201);
   const sessionId = created.body.session.id;
   assert.equal(created.body.session.state, 'baseline_capturing');
-  assert.deepEqual(device.sent, [], 'no hardware command while capturing baseline');
+  assert.deepEqual(device.sent, ['RETRIEVE'],
+    'session-start homing brings the arm to the resting home dock before anything else');
 
-  // A successful baseline completion moves the real session to monitoring.
+  // A successful baseline completion moves the real session to monitoring and returns arm to base.
   const baseline = await postEvent(app, 'baseline_captured', sessionId);
   assert.equal(baseline.body.event.type, 'baseline_captured');
   assert.equal((await activeSession(app)).state, 'monitoring');
-  assert.deepEqual(device.sent, [], 'baseline completion never touches the arm');
+  assert.deepEqual(device.sent, ['RETRIEVE', 'RETRIEVE'],
+    'baseline completion re-homes the arm (instant no-op when already docked)');
 
   // Now the real loop drives the arm: violation blocks, correction unblocks.
   await postEvent(app, 'slouch_violation', sessionId);
-  assert.deepEqual(device.sent, ['BLOCK']);
+  assert.deepEqual(device.sent, ['RETRIEVE', 'RETRIEVE', 'BLOCK']);
   assert.equal((await activeSession(app)).state, 'blocked');
 
   await postEvent(app, 'correction_requested', sessionId);
-  assert.deepEqual(device.sent, ['BLOCK', 'RETRIEVE']);
+  assert.deepEqual(device.sent, ['RETRIEVE', 'RETRIEVE', 'BLOCK', 'RETRIEVE']);
   assert.equal((await activeSession(app)).state, 'monitoring');
 
   // End behavior stays correct.
   const end = await request(app).post(`/api/sessions/${sessionId}/end`).expect(200);
   assert.equal(end.body.session.state, 'ended');
-  assert.deepEqual(device.sent, ['BLOCK', 'RETRIEVE']);
+  assert.deepEqual(device.sent, ['RETRIEVE', 'RETRIEVE', 'BLOCK', 'RETRIEVE']);
   assert.equal(await activeSession(app), null);
 });
 
@@ -122,10 +124,11 @@ test('a failed baseline: session never reaches monitoring and nothing blocks', a
   const sessionId = created.body.session.id;
 
   // No baseline_captured event is posted, and a violation arrives early. The
-  // session must stay baseline_capturing and the arm must never move.
+  // session must stay baseline_capturing and the arm must never BLOCK.
   const violation = await postEvent(app, 'slouch_violation', sessionId);
   assert.equal(violation.status, 201, 'the event is still recorded');
-  assert.deepEqual(device.sent, [], 'no BLOCK before monitoring');
+  assert.deepEqual(device.sent, ['RETRIEVE'],
+    'only the session-start homing ran; no BLOCK before monitoring');
   assert.equal((await activeSession(app)).state, 'baseline_capturing');
 });
 

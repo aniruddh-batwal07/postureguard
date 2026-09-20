@@ -24,4 +24,9 @@
  *    Close the device. Idempotent.
  */
 
-module.exports = {};
+const { createSerialTransport, autoDetectPort } = require('./serial-transport');
+
+module.exports = {
+  createSerialTransport,
+  autoDetectPort,
+};

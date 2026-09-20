@@ -242,15 +242,19 @@ test('baseline_captured moves a real session to monitoring; violations then driv
   const device = new FakeSerialDevice({ deferred: true });
   const { events, sessionStore } = setup({ state: 'baseline_capturing', device });
 
-  // Baseline completed: session becomes monitoring, no hardware command yet.
-  const baseline = await events.recordEvent(eventInput('baseline_captured'));
+  // Baseline completed: session becomes monitoring, arm returns to base dock.
+  const baselineP = events.recordEvent(eventInput('baseline_captured'));
+  await flush();
+  assert.deepEqual(device.sent, ['RETRIEVE']);
+  device.reply('RETRIEVE_OK');
+  const baseline = await baselineP;
   assert.equal(baseline.type, 'baseline_captured');
   assert.equal((await sessionStore.findBySessionId(SESSION_UUID)).state, 'monitoring');
 
   // Real slouch in that session: exactly one BLOCK.
   const violation = events.recordEvent(eventInput('slouch_violation'));
   await flush();
-  assert.deepEqual(device.sent, ['BLOCK']);
+  assert.deepEqual(device.sent, ['RETRIEVE', 'BLOCK']);
   device.reply('BLOCK_OK');
   await violation;
   assert.equal((await sessionStore.findBySessionId(SESSION_UUID)).state, 'blocked');
@@ -258,7 +262,7 @@ test('baseline_captured moves a real session to monitoring; violations then driv
   // Real correction: exactly one RETRIEVE, back to monitoring.
   const correction = events.recordEvent(eventInput('correction_requested'));
   await flush();
-  assert.deepEqual(device.sent, ['BLOCK', 'RETRIEVE']);
+  assert.deepEqual(device.sent, ['RETRIEVE', 'BLOCK', 'RETRIEVE']);
   device.reply('RETRIEVE_OK');
   await correction;
   assert.equal((await sessionStore.findBySessionId(SESSION_UUID)).state, 'monitoring');
@@ -282,4 +286,63 @@ test('without baseline_captured the session stays baseline_capturing (failed bas
   // No baseline event was posted (e.g. the capture failed/timed out) — the
   // session must remain exactly where it was, in baseline_capturing.
   assert.equal((await sessionStore.findBySessionId(SESSION_UUID)).state, 'baseline_capturing');
+});
+
+test('correction_requested arriving while BLOCK is in flight waits and automatically triggers RETRIEVE', async () => {
+  const device = new FakeSerialDevice({ deferred: true });
+  const { eventStore, events, sessionStore } = setup({ state: 'monitoring', device });
+
+  const violationP = events.recordEvent(eventInput('slouch_violation'));
+  await flush();
+  assert.deepEqual(device.sent, ['BLOCK']);
+  assert.equal((await sessionStore.findBySessionId(SESSION_UUID)).state, 'blocking');
+
+  // Correction arrives while BLOCK is still physically moving
+  const correctionP = events.recordEvent(eventInput('correction_requested'));
+  await flush();
+  // Hardware hasn't finished BLOCK, so only BLOCK was sent so far
+  assert.deepEqual(device.sent, ['BLOCK']);
+
+  // Hardware finishes BLOCK
+  device.reply('BLOCK_OK');
+  await violationP;
+
+  // Wait for the settle poller to dispatch the queued RETRIEVE
+  await new Promise((r) => setTimeout(r, 25));
+  await flush();
+  assert.deepEqual(device.sent, ['BLOCK', 'RETRIEVE']);
+  device.reply('RETRIEVE_OK');
+  await correctionP;
+
+  assert.equal((await sessionStore.findBySessionId(SESSION_UUID)).state, 'monitoring');
+  assert.equal(eventStore.events.length, 2);
+});
+
+test('slouch_violation arriving while RETRIEVE is in flight waits and automatically triggers BLOCK', async () => {
+  const device = new FakeSerialDevice({ deferred: true });
+  const { eventStore, events, sessionStore } = setup({ state: 'blocked', device });
+
+  const correctionP = events.recordEvent(eventInput('correction_requested'));
+  await flush();
+  assert.deepEqual(device.sent, ['RETRIEVE']);
+  assert.equal((await sessionStore.findBySessionId(SESSION_UUID)).state, 'unblocking');
+
+  // User slouches again while RETRIEVE is still physically moving
+  const violationP = events.recordEvent(eventInput('slouch_violation'));
+  await flush();
+  assert.deepEqual(device.sent, ['RETRIEVE']);
+
+  // Hardware finishes RETRIEVE
+  device.reply('RETRIEVE_OK');
+  await correctionP;
+
+  // Wait for the settle poller to dispatch the queued BLOCK
+  await new Promise((r) => setTimeout(r, 25));
+  await flush();
+  assert.deepEqual(device.sent, ['RETRIEVE', 'BLOCK']);
+  device.reply('BLOCK_OK');
+  await violationP;
+
+  assert.equal((await sessionStore.findBySessionId(SESSION_UUID)).state, 'blocked');
+  assert.equal(eventStore.events.length, 2);
 });
