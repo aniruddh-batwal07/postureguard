@@ -1,4 +1,4 @@
-"""Unit tests for the continuous background CvDaemon (M2 redesign)."""
+from typing import Any
 
 import numpy as np
 import pytest

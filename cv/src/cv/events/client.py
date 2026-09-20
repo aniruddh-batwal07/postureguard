@@ -41,8 +41,9 @@ class EventClient:
             body = json.dumps(payload).encode("utf-8")
             headers["Content-Type"] = "application/json"
         req = urllib.request.Request(url, data=body, headers=headers, method=method)
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         try:
-            with urllib.request.urlopen(req, timeout=self._timeout) as resp:
+            with opener.open(req, timeout=self._timeout) as resp:
                 data = resp.read()
                 return json.loads(data) if data else {}
         except urllib.error.HTTPError as err:
