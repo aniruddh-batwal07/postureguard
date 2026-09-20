@@ -19,6 +19,7 @@ class Config:
     mongo_uri: str = "mongodb://127.0.0.1:27017/postureguard"
     camera_index: int = 0
     serial_port: str = "/dev/ttyACM0"
+    poll_interval: float = 1.0
 
     # M2.3 slouch detection rules. Deviating from the session baseline beyond
     # slouch_threshold (magnitude) must be sustained for slouch_duration_seconds
@@ -41,6 +42,7 @@ class Config:
             mongo_uri=os.environ.get("MONGODB_URI", cls.mongo_uri),
             camera_index=int(os.environ.get("CAMERA_INDEX", cls.camera_index)),  # type: ignore[arg-type]
             serial_port=os.environ.get("ARDUINO_SERIAL_PORT", cls.serial_port),
+            poll_interval=float(os.environ.get("CV_POLL_INTERVAL", cls.poll_interval)),  # type: ignore[arg-type]
             slouch_threshold=float(os.environ.get("CV_SLOUCH_THRESHOLD", cls.slouch_threshold)),  # type: ignore[arg-type]
             slouch_duration_seconds=float(  # type: ignore[arg-type]
                 os.environ.get("CV_SLOUCH_DURATION_SECONDS", cls.slouch_duration_seconds)

@@ -54,16 +54,32 @@ function createEventService({
     }
     const persisted = await store.insert(event);
 
-    const action = type === 'slouch_violation' ? blockSession
-      : type === 'correction_requested' ? retrieveSession
-      : type === 'baseline_captured' ? markBaselineCaptured
-      : null;
-    if (action) {
+    if (type === 'slouch_violation' && blockSession) {
       try {
-        await action(sessionId);
+        await blockSession(sessionId);
       } catch (err) {
         if (isBenignDispatchError(err)) {
-          console.error(`[events] ${type} for session ${sessionId} did not trigger hardware: ${err.message}`);
+          console.error(`[events] slouch_violation for session ${sessionId} did not trigger hardware: ${err.message}`);
+        } else {
+          throw err;
+        }
+      }
+    } else if (type === 'correction_requested' && retrieveSession) {
+      try {
+        await retrieveSession(sessionId);
+      } catch (err) {
+        if (isBenignDispatchError(err)) {
+          console.error(`[events] correction_requested for session ${sessionId} did not trigger hardware: ${err.message}`);
+        } else {
+          throw err;
+        }
+      }
+    } else if (type === 'baseline_captured' && markBaselineCaptured) {
+      try {
+        await markBaselineCaptured(sessionId, data);
+      } catch (err) {
+        if (isBenignDispatchError(err)) {
+          console.error(`[events] baseline_captured for session ${sessionId} failed: ${err.message}`);
         } else {
           throw err;
         }

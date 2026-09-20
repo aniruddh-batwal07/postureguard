@@ -9,7 +9,9 @@ export function useSession(api = sessionApi, { pollIntervalMs = defaultPollInter
   const [session, setSession] = useState(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [baselineBusy, setBaselineBusy] = useState(false);
   const [error, setError] = useState(null);
+  const [baselineError, setBaselineError] = useState(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -35,11 +37,11 @@ export function useSession(api = sessionApi, { pollIntervalMs = defaultPollInter
     return () => clearInterval(id);
   }, [refresh, pollIntervalMs]);
 
-  const startSession = useCallback(async () => {
+  const startSession = useCallback(async (friendlyName) => {
     setBusy(true);
     setError(null);
     try {
-      await api.createSession();
+      await api.createSession(friendlyName);
       await refresh();
     } catch (err) {
       setError(err.message);
@@ -64,5 +66,45 @@ export function useSession(api = sessionApi, { pollIntervalMs = defaultPollInter
     }
   }, [api, session, refresh]);
 
-  return { session, loading, busy, error, startSession, endActiveSession };
+  const captureBaseline = useCallback(async () => {
+    if (!session) return;
+    setBaselineBusy(true);
+    setBaselineError(null);
+    try {
+      await api.captureBaseline();
+      await refresh();
+    } catch (err) {
+      setBaselineError(err.message);
+    } finally {
+      setBaselineBusy(false);
+    }
+  }, [api, session, refresh]);
+
+  const resetBaseline = useCallback(async () => {
+    if (!session) return;
+    setBaselineBusy(true);
+    setBaselineError(null);
+    try {
+      await api.resetBaseline();
+      await refresh();
+    } catch (err) {
+      setBaselineError(err.message);
+    } finally {
+      setBaselineBusy(false);
+    }
+  }, [api, session, refresh]);
+
+  return {
+    session,
+    loading,
+    busy,
+    baselineBusy,
+    error,
+    baselineError,
+    startSession,
+    endActiveSession,
+    captureBaseline,
+    resetBaseline,
+    refresh,
+  };
 }

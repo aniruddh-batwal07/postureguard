@@ -130,16 +130,17 @@ test('recordEvent dispatches baseline_captured to markBaselineCaptured', async (
   const dispatched = [];
   const service = createEventService({
     store,
-    findSessionById: async () => session('baseline_capturing'),
+    findSessionById: async () => session('monitoring'),
     now: fixedNow,
-    markBaselineCaptured: async (sessionId) => dispatched.push({ sessionId }),
+    markBaselineCaptured: async (sessionId, data) => dispatched.push({ sessionId, data }),
   });
 
-  const event = await service.recordEvent(eventInput({ type: 'baseline_captured' }));
+  const baselineData = { headForward: 0.5, headDrop: 0.2, shoulderRoll: 0.1, sampleCount: 30 };
+  const event = await service.recordEvent(eventInput({ type: 'baseline_captured', data: baselineData }));
 
   assert.equal(event.type, 'baseline_captured');
   assert.equal(store.events.length, 1, 'baseline event persisted');
-  assert.deepEqual(dispatched, [{ sessionId: SESSION_UUID }], 'markBaselineCaptured received the session id');
+  assert.deepEqual(dispatched, [{ sessionId: SESSION_UUID, data: baselineData }], 'markBaselineCaptured received session id and data');
 });
 
 test('recordEvent swallows an INVALID_TRANSITION from baseline capture dispatch', async () => {

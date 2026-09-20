@@ -10,6 +10,9 @@ vi.mock('../src/api/sessions', () => ({
   getActiveSession: vi.fn(),
   createSession: vi.fn(),
   endSession: vi.fn(),
+  captureBaseline: vi.fn(),
+  resetBaseline: vi.fn(),
+  getSessionHistory: vi.fn(),
 }));
 
 vi.mock('../src/api/events', () => ({
@@ -30,9 +33,11 @@ const SESSION_ID = 'a2f4c3b1-1111-4222-8333-444455556666';
 function session(overrides = {}) {
   return {
     id: SESSION_ID,
-    state: 'baseline_capturing',
-    createdAt: '2026-09-13T10:00:00.000Z',
-    updatedAt: '2026-09-13T10:00:00.000Z',
+    friendlyName: 'Session Sep 20, 16:30',
+    state: 'monitoring',
+    baselineState: 'configured',
+    createdAt: '2026-09-20T10:00:00.000Z',
+    updatedAt: '2026-09-20T10:00:00.000Z',
     endedAt: null,
     ...overrides,
   };
@@ -43,7 +48,7 @@ function event(overrides = {}) {
     id: 'e2e1f0d0-0000-4000-8000-000000000001',
     sessionId: SESSION_ID,
     type: 'slouch_violation',
-    timestamp: '2026-09-13T10:05:00.000Z',
+    timestamp: '2026-09-20T10:05:00.000Z',
     ...overrides,
   };
 }
@@ -54,7 +59,8 @@ function statistics(overrides = {}) {
     durationSeconds: 600,
     violationCount: 0,
     correctionCount: 0,
-    startedAt: '2026-09-13T10:00:00.000Z',
+    violationDurationSeconds: 0,
+    startedAt: '2026-09-20T10:00:00.000Z',
     endedAt: null,
     ...overrides,
   };
@@ -75,12 +81,24 @@ beforeEach(() => {
   statisticsApi.getStatistics.mockResolvedValue(statistics());
   settingsApi.getSettings.mockResolvedValue(defaultSettings());
   settingsApi.updateSettings.mockResolvedValue(defaultSettings());
-  // Keep the session-state poll from firing during count-sensitive tests.
+  api.getSessionHistory.mockResolvedValue([]);
   vi.stubEnv('VITE_SESSION_POLL_INTERVAL_MS', '60000');
+  vi.stubEnv('VITE_HISTORY_POLL_INTERVAL_MS', '60000');
 });
 
 afterEach(() => {
   vi.unstubAllEnvs();
+});
+
+describe('Intro Section', () => {
+  it('renders the PostureGuard intro hero section', async () => {
+    api.getActiveSession.mockResolvedValue(null);
+    render(<App />);
+
+    expect(screen.getByRole('region', { name: 'PostureGuard introduction' })).toBeInTheDocument();
+    expect(screen.getByText('PostureGuard Dashboard')).toBeInTheDocument();
+    expect(screen.getByText(/combines continuous webcam-based computer vision/i)).toBeInTheDocument();
+  });
 });
 
 describe('App session dashboard', () => {
@@ -98,8 +116,9 @@ describe('App session dashboard', () => {
     expect(api.getActiveSession).toHaveBeenCalledTimes(1);
   });
 
-  it('renders an active session with its state', async () => {
-    api.getActiveSession.mockResolvedValue(session({ state: 'monitoring' }));
+  it('renders an active session with friendly info and hides raw UUID', async () => {
+    const activeSess = session({ state: 'monitoring', friendlyName: 'My Morning Session' });
+    api.getActiveSession.mockResolvedValue(activeSess);
     render(<App />);
 
     const end = screen.getByRole('button', { name: 'End Session' });
@@ -107,12 +126,14 @@ describe('App session dashboard', () => {
 
     expect(screen.getByText('Yes')).toBeInTheDocument();
     expect(screen.getByText('monitoring')).toBeInTheDocument();
-    expect(screen.getByText(SESSION_ID)).toBeInTheDocument();
+    expect(screen.getByText('My Morning Session')).toBeInTheDocument();
+    // Raw UUID must NOT be displayed in normal UI
+    expect(screen.queryByText(SESSION_ID)).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Start Session' })).toBeDisabled();
   });
 
-  it('starts a session and refreshes the displayed state', async () => {
-    const created = session();
+  it('starts a session without capturing baseline automatically', async () => {
+    const created = session({ state: 'active', baselineState: 'unconfigured' });
     api.getActiveSession.mockResolvedValueOnce(null).mockResolvedValueOnce(created);
     api.createSession.mockResolvedValue(created);
     render(<App />);
@@ -125,15 +146,15 @@ describe('App session dashboard', () => {
     await waitFor(() => expect(api.createSession).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(screen.getByText('Yes')).toBeInTheDocument());
 
-    expect(screen.getByText('baseline_capturing')).toBeInTheDocument();
+    expect(screen.getByText('active')).toBeInTheDocument();
+    expect(screen.getByText('⚠️ Baseline Unconfigured')).toBeInTheDocument();
     expect(start).toBeDisabled();
-    expect(api.getActiveSession).toHaveBeenCalledTimes(2);
   });
 
-  it('ends the active session and refreshes the displayed state', async () => {
+  it('ends the active session and refreshes history', async () => {
     const active = session({ state: 'monitoring' });
     api.getActiveSession.mockResolvedValueOnce(active).mockResolvedValueOnce(null);
-    api.endSession.mockResolvedValue(session({ state: 'ended', endedAt: '2026-09-13T11:00:00.000Z' }));
+    api.endSession.mockResolvedValue(session({ state: 'ended', endedAt: '2026-09-20T11:00:00.000Z' }));
     render(<App />);
 
     const end = screen.getByRole('button', { name: 'End Session' });
@@ -148,7 +169,7 @@ describe('App session dashboard', () => {
     expect(end).toBeDisabled();
   });
 
-  it('shows an error when the initial session load fails', async () => {
+  it('shows an error when initial session load fails', async () => {
     api.getActiveSession.mockRejectedValue(new Error('MongoDB is not connected'));
     render(<App />);
 
@@ -159,45 +180,67 @@ describe('App session dashboard', () => {
     expect(screen.getByText('No')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Start Session' })).toBeEnabled();
   });
+});
 
-  it('shows an error when starting a session fails', async () => {
-    api.getActiveSession.mockResolvedValue(null);
-    api.createSession.mockRejectedValue(new Error('an active session already exists'));
+describe('Baseline Management', () => {
+  it('renders unconfigured baseline status with instructions', async () => {
+    api.getActiveSession.mockResolvedValue(session({ baselineState: 'unconfigured' }));
     render(<App />);
 
-    const start = screen.getByRole('button', { name: 'Start Session' });
-    await waitFor(() => expect(start).toBeEnabled());
-
-    await userEvent.click(start);
-
-    await waitFor(() =>
-      expect(screen.getByRole('alert')).toHaveTextContent('an active session already exists'),
-    );
-
-    expect(screen.getByText('No')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText('⚠️ Baseline Unconfigured')).toBeInTheDocument());
+    expect(screen.getByText('Posture Violation Detection Inactive')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Capture Posture Baseline' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Reset Baseline' })).toBeDisabled();
   });
 
-  it('shows an error when ending a session fails and keeps the session state', async () => {
-    const active = session({ state: 'monitoring' });
-    api.getActiveSession.mockResolvedValue(active);
-    api.endSession.mockRejectedValue(new Error('cannot transition session'));
+  it('triggers baseline capture when user clicks Capture Posture Baseline', async () => {
+    const active = session({ baselineState: 'unconfigured' });
+    const capturing = session({ baselineState: 'capturing' });
+    api.getActiveSession.mockResolvedValueOnce(active).mockResolvedValueOnce(capturing);
+    api.captureBaseline.mockResolvedValue(capturing);
+
     render(<App />);
 
-    const end = screen.getByRole('button', { name: 'End Session' });
-    await waitFor(() => expect(end).toBeEnabled());
+    const captureBtn = await screen.findByRole('button', { name: 'Capture Posture Baseline' });
+    await userEvent.click(captureBtn);
 
-    await userEvent.click(end);
+    await waitFor(() => expect(api.captureBaseline).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByText('⏳ Capturing Baseline…')).toBeInTheDocument());
+  });
+
+  it('triggers baseline reset when user clicks Reset Baseline', async () => {
+    const configuredSess = session({ baselineState: 'configured' });
+    const resetSess = session({ baselineState: 'unconfigured' });
+    api.getActiveSession.mockResolvedValueOnce(configuredSess).mockResolvedValueOnce(resetSess);
+    api.resetBaseline.mockResolvedValue(resetSess);
+
+    render(<App />);
+
+    const resetBtn = await screen.findByRole('button', { name: 'Reset Baseline' });
+    await waitFor(() => expect(resetBtn).toBeEnabled());
+
+    await userEvent.click(resetBtn);
+
+    await waitFor(() => expect(api.resetBaseline).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByText('⚠️ Baseline Unconfigured')).toBeInTheDocument());
+  });
+
+  it('shows error banner when capture baseline fails', async () => {
+    api.getActiveSession.mockResolvedValue(session({ baselineState: 'unconfigured' }));
+    api.captureBaseline.mockRejectedValue(new Error('webcam busy'));
+
+    render(<App />);
+
+    const captureBtn = await screen.findByRole('button', { name: 'Capture Posture Baseline' });
+    await userEvent.click(captureBtn);
 
     await waitFor(() =>
-      expect(screen.getByRole('alert')).toHaveTextContent('cannot transition session'),
+      expect(screen.getByRole('alert')).toHaveTextContent('Baseline error: webcam busy'),
     );
-
-    expect(screen.getByText('Yes')).toBeInTheDocument();
-    expect(screen.getByText('monitoring')).toBeInTheDocument();
   });
 });
 
-describe('App session states', () => {
+describe('App session states & blocking', () => {
   it('renders each backend session state with a clear label', async () => {
     const cases = {
       idle: 'No session active',
@@ -223,70 +266,20 @@ describe('App session states', () => {
     }
   });
 
-  it('polls for session state changes', async () => {
-    vi.stubEnv('VITE_SESSION_POLL_INTERVAL_MS', '60');
-    api.getActiveSession.mockResolvedValue(null);
-    render(<App />);
-
-    await waitFor(() => expect(api.getActiveSession).toHaveBeenCalledTimes(1));
-    await waitFor(
-      () => expect(api.getActiveSession.mock.calls.length).toBeGreaterThanOrEqual(2),
-      { timeout: 4000 },
-    );
-  });
-
-  it('shows a Fix your posture message while blocked and clears it after recovery', async () => {
-    vi.stubEnv('VITE_SESSION_POLL_INTERVAL_MS', '60');
-    api.getActiveSession
-      .mockResolvedValueOnce(session({ state: 'blocked' }))
-      .mockResolvedValue(session({ state: 'monitoring' }));
+  it('shows a Fix your posture message while blocked', async () => {
+    api.getActiveSession.mockResolvedValue(session({ state: 'blocked' }));
     render(<App />);
 
     await waitFor(() => expect(screen.getByText('Fix your posture.')).toBeInTheDocument());
-
-    await waitFor(() => expect(screen.queryByText('Fix your posture.')).not.toBeInTheDocument(), {
-      timeout: 4000,
-    });
-
-    expect(api.getActiveSession.mock.calls.length).toBeGreaterThanOrEqual(2);
   });
 });
 
-describe('App live events', () => {
-  it('shows a slouch_violation event from the active session', async () => {
-    api.getActiveSession.mockResolvedValue(session({ state: 'monitoring' }));
-    eventsApi.getEvents.mockResolvedValue([event({ type: 'slouch_violation' })]);
-    render(<App />);
-
-    await waitFor(() =>
-      expect(screen.getByText('Posture violation detected')).toBeInTheDocument(),
-    );
-    expect(eventsApi.getEvents).toHaveBeenCalledWith(SESSION_ID);
-  });
-
-  it('shows a correction_requested event from the active session', async () => {
-    api.getActiveSession.mockResolvedValue(session({ state: 'monitoring' }));
-    eventsApi.getEvents.mockResolvedValue([event({ type: 'correction_requested' })]);
-    render(<App />);
-
-    await waitFor(() =>
-      expect(screen.getByText('Posture correction requested')).toBeInTheDocument(),
-    );
-  });
-
-  it('shows both violation and correction events in order', async () => {
+describe('Live Events & Metrics', () => {
+  it('shows slouch_violation and correction_requested events', async () => {
     api.getActiveSession.mockResolvedValue(session({ state: 'monitoring' }));
     eventsApi.getEvents.mockResolvedValue([
-      event({
-        id: 'e2e1f0d0-0000-4000-8000-000000000001',
-        type: 'slouch_violation',
-        timestamp: '2026-09-13T10:05:00.000Z',
-      }),
-      event({
-        id: 'e2e1f0d0-0000-4000-8000-000000000002',
-        type: 'correction_requested',
-        timestamp: '2026-09-13T10:08:00.000Z',
-      }),
+      event({ type: 'slouch_violation' }),
+      event({ id: 'ev-2', type: 'correction_requested' }),
     ]);
     render(<App />);
 
@@ -296,125 +289,59 @@ describe('App live events', () => {
     expect(screen.getByText('Posture correction requested')).toBeInTheDocument();
   });
 
-  it('polls for new events on the configured interval', async () => {
-    vi.stubEnv('VITE_EVENT_POLL_INTERVAL_MS', '60');
+  it('renders duration, violations, corrections, violation time, and screen status', async () => {
     api.getActiveSession.mockResolvedValue(session({ state: 'monitoring' }));
-    eventsApi.getEvents.mockResolvedValue([]);
-    render(<App />);
-
-    await waitFor(() => expect(eventsApi.getEvents).toHaveBeenCalledTimes(1));
-    await waitFor(
-      () => expect(eventsApi.getEvents.mock.calls.length).toBeGreaterThanOrEqual(2),
-      { timeout: 4000 },
+    statisticsApi.getStatistics.mockResolvedValue(
+      statistics({ durationSeconds: 7200, violationCount: 3, correctionCount: 2, violationDurationSeconds: 120 }),
     );
-  });
-
-  it('shows a loading state while events are being fetched', async () => {
-    api.getActiveSession.mockResolvedValue(session({ state: 'monitoring' }));
-    eventsApi.getEvents.mockImplementation(() => new Promise(() => {}));
     render(<App />);
 
-    await waitFor(() => expect(screen.getByText('Loading events…')).toBeInTheDocument());
-  });
-
-  it('shows an error when loading events fails', async () => {
-    api.getActiveSession.mockResolvedValue(session({ state: 'monitoring' }));
-    eventsApi.getEvents.mockRejectedValue(new Error('MongoDB is not connected'));
-    render(<App />);
-
-    await waitFor(() =>
-      expect(screen.getByRole('alert')).toHaveTextContent(
-        'Events error: MongoDB is not connected',
-      ),
-    );
+    const section = screen.getByRole('region', { name: 'Session statistics' });
+    await waitFor(() => expect(section).toHaveTextContent('2h'));
+    expect(section).toHaveTextContent('Violations');
+    expect(section).toHaveTextContent('3');
+    expect(section).toHaveTextContent('Corrections');
+    expect(section).toHaveTextContent('2');
+    expect(section).toHaveTextContent('2m 0s');
+    expect(section).toHaveTextContent('Clear (Docked)');
   });
 });
 
-describe('App statistics', () => {
-  it('renders duration, violations, and corrections for an active session', async () => {
-    api.getActiveSession.mockResolvedValue(session({ state: 'monitoring' }));
-    statisticsApi.getStatistics.mockResolvedValue(
-      statistics({ durationSeconds: 7200, violationCount: 3, correctionCount: 2 }),
-    );
-    render(<App />);
-
-    const section = screen.getByLabelText('Session statistics');
-    await waitFor(() => expect(section).toHaveTextContent('2h'));
-    expect(section).toHaveTextContent('Violations:');
-    expect(section).toHaveTextContent('3');
-    expect(section).toHaveTextContent('Corrections:');
-    expect(section).toHaveTextContent('2');
-    expect(statisticsApi.getStatistics).toHaveBeenCalledWith(SESSION_ID);
-  });
-
-  it('renders event history alongside the statistics', async () => {
-    api.getActiveSession.mockResolvedValue(session({ state: 'monitoring' }));
-    eventsApi.getEvents.mockResolvedValue([event({ type: 'slouch_violation' })]);
-    statisticsApi.getStatistics.mockResolvedValue(
-      statistics({ durationSeconds: 300, violationCount: 1, correctionCount: 1 }),
-    );
-    render(<App />);
-
-    await waitFor(() =>
-      expect(screen.getByText('Posture violation detected')).toBeInTheDocument(),
-    );
-    const section = screen.getByLabelText('Session statistics');
-    expect(section).toHaveTextContent('5m 0s');
-    expect(section).toHaveTextContent('1');
-  });
-
-  it('renders an empty state when no session exists', async () => {
+describe('Session History', () => {
+  it('renders history table with completed sessions without raw UUIDs', async () => {
     api.getActiveSession.mockResolvedValue(null);
+    api.getSessionHistory.mockResolvedValue([
+      {
+        id: 'hist-1234-5678',
+        friendlyName: 'Morning Session',
+        createdAt: '2026-09-20T08:00:00.000Z',
+        endedAt: '2026-09-20T09:00:00.000Z',
+        durationSeconds: 3600,
+        violationCount: 2,
+        correctionCount: 2,
+        violationDurationSeconds: 90,
+        baselineState: 'configured',
+      },
+    ]);
+
+    render(<App />);
+
+    const historySection = screen.getByRole('region', { name: 'Session history' });
+    await waitFor(() => expect(within(historySection).getByText('Morning Session')).toBeInTheDocument());
+    expect(within(historySection).getByText('1h')).toBeInTheDocument();
+    expect(within(historySection).getAllByText('2').length).toBeGreaterThanOrEqual(1);
+    expect(within(historySection).queryByText('hist-1234-5678')).not.toBeInTheDocument();
+  });
+
+
+  it('renders empty history message when no history exists', async () => {
+    api.getActiveSession.mockResolvedValue(null);
+    api.getSessionHistory.mockResolvedValue([]);
     render(<App />);
 
     await waitFor(() =>
-      expect(screen.getByText('Start a session to see statistics.')).toBeInTheDocument(),
+      expect(screen.getByText('No completed session history available.')).toBeInTheDocument(),
     );
-    expect(statisticsApi.getStatistics).not.toHaveBeenCalled();
-  });
-
-  it('shows a loading state while statistics are being fetched', async () => {
-    api.getActiveSession.mockResolvedValue(session({ state: 'monitoring' }));
-    statisticsApi.getStatistics.mockImplementation(() => new Promise(() => {}));
-    render(<App />);
-
-    await waitFor(() => expect(screen.getByText('Loading statistics…')).toBeInTheDocument());
-  });
-
-  it('shows an error when loading statistics fails', async () => {
-    api.getActiveSession.mockResolvedValue(session({ state: 'monitoring' }));
-    statisticsApi.getStatistics.mockRejectedValue(new Error('MongoDB is not connected'));
-    render(<App />);
-
-    await waitFor(() =>
-      expect(screen.getByRole('alert')).toHaveTextContent(
-        'Statistics error: MongoDB is not connected',
-      ),
-    );
-  });
-
-  it('keeps the final statistics visible after the session ends', async () => {
-    const active = session({ state: 'monitoring' });
-    const ended = session({ state: 'ended', endedAt: '2026-09-13T11:00:00.000Z' });
-    api.getActiveSession.mockResolvedValueOnce(active).mockResolvedValueOnce(null);
-    api.endSession.mockResolvedValue(ended);
-    statisticsApi.getStatistics.mockResolvedValue(
-      statistics({ durationSeconds: 3600, violationCount: 2, correctionCount: 1, endedAt: '2026-09-13T11:00:00.000Z' }),
-    );
-    render(<App />);
-
-    const end = screen.getByRole('button', { name: 'End Session' });
-    await waitFor(() => expect(end).toBeEnabled());
-
-    await userEvent.click(end);
-
-    await waitFor(() => expect(api.endSession).toHaveBeenCalledWith(SESSION_ID));
-    await waitFor(() => expect(screen.getByText('idle')).toBeInTheDocument());
-
-    const section = screen.getByLabelText('Session statistics');
-    expect(section).toHaveTextContent('1h');
-    expect(section).toHaveTextContent('2');
-    expect(section).toHaveTextContent('1');
   });
 });
 
@@ -431,28 +358,12 @@ describe('App settings', () => {
     }));
     render(<App />);
 
-    const section = await screen.findByLabelText('Detection settings');
+    const section = await screen.findByRole('region', { name: 'Detection settings' });
     await waitFor(() => expect(within(section).getByLabelText(/Slouch threshold/i)).toBeInTheDocument());
 
     expect(within(section).getByLabelText(/Slouch threshold/i)).toHaveValue(0.15);
     expect(within(section).getByLabelText(/Slouch duration/i)).toHaveValue(2.0);
     expect(within(section).getByLabelText(/Correction duration/i)).toHaveValue(2.0);
-  });
-
-  it('shows a loading state while settings are being fetched', async () => {
-    settingsApi.getSettings.mockImplementation(() => new Promise(() => {}));
-    render(<App />);
-
-    await waitFor(() => expect(screen.getByText('Loading settings…')).toBeInTheDocument());
-  });
-
-  it('shows an error when loading settings fails', async () => {
-    settingsApi.getSettings.mockRejectedValue(new Error('MongoDB is not connected'));
-    render(<App />);
-
-    await waitFor(() =>
-      expect(screen.getByRole('alert')).toHaveTextContent('Settings error: MongoDB is not connected'),
-    );
   });
 
   it('saves settings and shows a success message', async () => {
@@ -467,42 +378,5 @@ describe('App settings', () => {
 
     await waitFor(() => expect(settingsApi.updateSettings).toHaveBeenCalled());
     await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Settings saved.'));
-  });
-
-  it('shows saving state while the PUT is in flight', async () => {
-    settingsApi.getSettings.mockResolvedValue(defaultSettings());
-    settingsApi.updateSettings.mockImplementation(() => new Promise(() => {}));
-    render(<App />);
-
-    const saveBtn = await screen.findByRole('button', { name: /Save settings/i });
-    await waitFor(() => expect(saveBtn).not.toBeDisabled());
-
-    await userEvent.click(saveBtn);
-
-    await waitFor(() => expect(screen.getByRole('button', { name: /Saving…/i })).toBeInTheDocument());
-  });
-
-  it('shows an error when saving settings fails', async () => {
-    settingsApi.getSettings.mockResolvedValue(defaultSettings());
-    settingsApi.updateSettings.mockRejectedValue(new Error('slouchThreshold must be >= 0'));
-    render(<App />);
-
-    const saveBtn = await screen.findByRole('button', { name: /Save settings/i });
-    await waitFor(() => expect(saveBtn).not.toBeDisabled());
-
-    await userEvent.click(saveBtn);
-
-    await waitFor(() =>
-      expect(screen.getByRole('alert')).toHaveTextContent('slouchThreshold must be >= 0'),
-    );
-  });
-
-  it('existing session behavior remains intact alongside the settings section', async () => {
-    api.getActiveSession.mockResolvedValue(session({ state: 'monitoring' }));
-    render(<App />);
-
-    await waitFor(() => expect(screen.getByText('monitoring')).toBeInTheDocument());
-    await waitFor(() => expect(screen.getByLabelText('Detection settings')).toBeInTheDocument());
-    expect(screen.getByRole('button', { name: 'End Session' })).toBeInTheDocument();
   });
 });

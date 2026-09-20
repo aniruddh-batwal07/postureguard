@@ -5,7 +5,6 @@ const fsm = require('../src/sessions/fsm');
 test('defines the expected backend session states', () => {
   assert.deepEqual(fsm.VALID_STATES, [
     'idle',
-    'baseline_capturing',
     'monitoring',
     'blocking',
     'blocked',
@@ -13,13 +12,16 @@ test('defines the expected backend session states', () => {
     'ending',
     'ended',
   ]);
+  assert.deepEqual(fsm.VALID_BASELINE_STATES, [
+    'unconfigured',
+    'capturing',
+    'configured',
+  ]);
 });
 
 test('accepts valid transitions', () => {
   const valid = [
-    ['idle', 'baseline_capturing'],
-    ['baseline_capturing', 'monitoring'],
-    ['baseline_capturing', 'ending'],
+    ['idle', 'monitoring'],
     ['monitoring', 'blocking'],
     ['blocking', 'blocked'],
     ['blocking', 'monitoring'],
@@ -39,34 +41,24 @@ test('accepts valid transitions', () => {
 
 test('rejects invalid transitions', () => {
   const invalid = [
-    ['idle', 'monitoring'],
     ['idle', 'blocking'],
     ['idle', 'blocked'],
     ['idle', 'unblocking'],
     ['idle', 'ended'],
-    ['baseline_capturing', 'idle'],
-    ['baseline_capturing', 'blocking'],
-    ['baseline_capturing', 'blocked'],
-    ['baseline_capturing', 'unblocking'],
-    ['baseline_capturing', 'ended'],
     ['monitoring', 'idle'],
-    ['monitoring', 'baseline_capturing'],
     ['monitoring', 'blocked'],
     ['monitoring', 'unblocking'],
     ['monitoring', 'monitoring'],
     ['blocking', 'idle'],
-    ['blocking', 'baseline_capturing'],
     ['blocking', 'blocking'],
     ['blocking', 'unblocking'],
     ['blocking', 'ended'],
     ['blocked', 'idle'],
-    ['blocked', 'baseline_capturing'],
     ['blocked', 'blocking'],
     ['blocked', 'blocked'],
     ['blocked', 'monitoring'],
     ['blocked', 'ended'],
     ['unblocking', 'idle'],
-    ['unblocking', 'baseline_capturing'],
     ['unblocking', 'blocking'],
     ['unblocking', 'unblocking'],
     ['unblocking', 'ended'],
@@ -74,7 +66,6 @@ test('rejects invalid transitions', () => {
     ['ending', 'blocking'],
     ['ending', 'blocked'],
     ['ending', 'unblocking'],
-    ['ended', 'baseline_capturing'],
     ['ended', 'monitoring'],
     ['ended', 'blocking'],
     ['ended', 'blocked'],
@@ -95,6 +86,7 @@ test('ended is a terminal state', () => {
 test('unknown states are not valid', () => {
   assert.equal(fsm.isValidState('monkey'), false);
   assert.equal(fsm.isValidState('busy'), false);
+  assert.equal(fsm.isValidBaselineState('unknown'), false);
   assert.equal(fsm.canTransition('blocking', 'monkey'), false);
   assert.equal(fsm.canTransition('monitoring', 'monkey'), false);
 });

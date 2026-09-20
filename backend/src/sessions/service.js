@@ -26,16 +26,35 @@ class InvalidSessionTransitionError extends Error {
   }
 }
 
+function formatFriendlySessionName(timestamp) {
+  const dateStr = timestamp.toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
+  const timeStr = timestamp.toLocaleTimeString('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+  return `Session on ${dateStr} at ${timeStr}`;
+}
+
 function createSessionService({ store, hardware, now = () => new Date() }) {
-  async function createSession() {
+  async function createSession({ friendlyName } = {}) {
     const active = await store.findActive();
     if (active) {
       throw new ActiveSessionExistsError('an active session already exists');
     }
     const timestamp = now();
+    const name = typeof friendlyName === 'string' && friendlyName.trim().length > 0
+      ? friendlyName.trim()
+      : formatFriendlySessionName(timestamp);
     const session = {
       sessionId: randomUUID(),
-      state: 'baseline_capturing',
+      friendlyName: name,
+      state: 'monitoring',
+      baselineState: 'unconfigured',
+      baseline: null,
       createdAt: timestamp,
       updatedAt: timestamp,
       endedAt: null,
@@ -47,19 +66,71 @@ function createSessionService({ store, hardware, now = () => new Date() }) {
     return store.findActive();
   }
 
-  // Baseline capture completion (M4.2): the CV signals a successful upright
-  // baseline via the `baseline_captured` event; the backend — authoritative for
-  // session state — moves the session from `baseline_capturing` to
-  // `monitoring`. A duplicate or out-of-order event raises
-  // INVALID_TRANSITION (swallowed as benign by the events layer) so capture is
-  // never restarted and state is never regressed. Independent of hardware.
-  async function markBaselineCaptured(sessionId) {
+  async function requestBaselineCapture(sessionId) {
+    let session;
+    if (sessionId) {
+      session = await store.findBySessionId(sessionId);
+    } else {
+      session = await store.findActive();
+    }
+    if (!session) {
+      throw new SessionNotFoundError('no active session found');
+    }
+    if (session.state === 'ended') {
+      throw new InvalidSessionTransitionError('cannot request baseline capture for an ended session');
+    }
+    if (session.baselineState === 'capturing') {
+      return session;
+    }
+    return store.updateState(session.sessionId, {
+      baselineState: 'capturing',
+      updatedAt: now(),
+    });
+  }
+
+  async function resetBaseline(sessionId) {
+    let session;
+    if (sessionId) {
+      session = await store.findBySessionId(sessionId);
+    } else {
+      session = await store.findActive();
+    }
+    if (!session) {
+      throw new SessionNotFoundError('no active session found');
+    }
+    if (session.state === 'ended') {
+      throw new InvalidSessionTransitionError('cannot reset baseline for an ended session');
+    }
+    return store.updateState(session.sessionId, {
+      baselineState: 'unconfigured',
+      baseline: null,
+      updatedAt: now(),
+    });
+  }
+
+  async function markBaselineCaptured(sessionId, baselineData = null) {
     const session = await store.findBySessionId(sessionId);
     if (!session) {
       throw new SessionNotFoundError(`session ${sessionId} not found`);
     }
-    assertState(session, 'monitoring');
-    return store.updateState(sessionId, { state: 'monitoring', updatedAt: now() });
+    if (session.state === 'ended') {
+      throw new InvalidSessionTransitionError(`cannot set baseline for ended session ${sessionId}`);
+    }
+    const changes = {
+      baselineState: 'configured',
+      updatedAt: now(),
+    };
+    if (baselineData !== null && baselineData !== undefined) {
+      changes.baseline = baselineData;
+    }
+    return store.updateState(sessionId, changes);
+  }
+
+  async function getHistory({ limit = 20, skip = 0 } = {}) {
+    if (store.findHistory) {
+      return store.findHistory({ limit, skip });
+    }
+    return [];
   }
 
   async function endSession(sessionId) {
@@ -158,7 +229,10 @@ function createSessionService({ store, hardware, now = () => new Date() }) {
   return {
     createSession,
     getActiveSession,
+    requestBaselineCapture,
+    resetBaseline,
     markBaselineCaptured,
+    getHistory,
     endSession,
     blockSession,
     retrieveSession,

@@ -55,7 +55,7 @@ function createApp({ persistence = mongo, sessionService, eventService, statisti
 
   app.use(express.json());
   app.use('/api', createStatusRouter(persistence));
-  app.use('/api', createSessionsRouter(sessions));
+  app.use('/api', createSessionsRouter(sessions, statistics));
   app.use('/api', createEventsRouter(events));
   app.use('/api', createStatisticsRouter(statistics));
   app.use('/api', createSettingsRouter(settings));

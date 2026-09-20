@@ -9,8 +9,14 @@ class MockBackend:
     def __init__(self) -> None:
         self.requests = []
         self.events = []
-        self.active_session = None
-        self.session_counter = 0
+        self.active_session = {
+            "id": "session-1",
+            "state": "active",
+            "baselineState": "unconfigured",
+            "baseline": None,
+        }
+
+        self.session_counter = 1
         self.events_status = 201
         # M3.3: current settings returned by GET /api/settings
         self.settings = {
@@ -27,23 +33,32 @@ class MockBackend:
         if (method, path) == ("GET", "/api/status"):
             return 200, {"status": "ok", "service": "postureguard-backend"}
         if (method, path) == ("GET", "/api/sessions/active"):
+            if hasattr(self, "sessions_status") and self.sessions_status != 200:
+                return self.sessions_status, {"error": "backend error"}
             return 200, {"session": self.active_session}
+
         if (method, path) == ("POST", "/api/sessions"):
             self.session_counter += 1
             self.active_session = {
                 "id": f"session-{self.session_counter}",
-                "state": "baseline_capturing",
+                "state": "active",
+                "baselineState": "unconfigured",
+                "baseline": None,
             }
             return 201, {"session": self.active_session}
         if (method, path) == ("POST", "/api/events"):
-            payload = self.events[-1] if self.events else {}
+            if payload and payload.get("type") == "baseline_captured" and self.active_session:
+                self.active_session["baselineState"] = "configured"
+                self.active_session["baseline"] = payload.get("data")
+            evt = self.events[-1] if self.events else {}
             event = {
                 "id": f"ev-{len(self.events)}",
-                "sessionId": payload.get("sessionId"),
-                "type": payload.get("type"),
-                "timestamp": payload.get("timestamp"),
+                "sessionId": evt.get("sessionId"),
+                "type": evt.get("type"),
+                "timestamp": evt.get("timestamp"),
             }
             return self.events_status, {"event": event}
+
         if (method, path) == ("GET", "/api/settings"):
             return 200, {"settings": self.settings}
         if method == "PUT" and path == "/api/settings":

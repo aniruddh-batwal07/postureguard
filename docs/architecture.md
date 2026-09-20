@@ -103,21 +103,20 @@ cooperating processes plus an embedded controller:
   `localhost` (WSL2 localhost forwarding).
 
 ### 2.2 Python computer vision service
-- Runs **natively on the Windows host** as a regular process, so OpenCV has
-  direct access to the physical webcam.
-- Captures the laptop webcam feed (spec FR-04).
-- Runs MediaPipe Pose for posture detection (FR-05) and YOLOv8 Nano +
-  MediaPipe Hands for phone-use detection (FR-06).
-- Establishes the per-session posture baseline when the user sits upright at
-  session start (spec §3 step 2; FR-02).
-- Owns the violation timers/debounce rules: a slouch or phone violation is only
-  confirmed once the condition persists for a defined duration (FR-07–FR-09).
-- Continues monitoring during blocking and emits correction events when the
-  user has held correct behavior for the required duration (spec §3 step 7).
-- Sends `session_start`, `baseline_captured`, violation, and correction events
-  to the backend over HTTP (spec §7 step 3/6).
-- Does **not** persist data, does **not** command hardware directly, and does
-  **not** serve the dashboard.
+- Runs **natively on the Windows host** as a continuous background daemon (`python -m cv`).
+- Browser and backend NEVER start or stop the Python daemon; it runs continuously.
+- Continuously polls `GET /api/sessions/active` at a modest interval (default 1.0s, `CV_POLL_INTERVAL`).
+- Uses backend session object and `baselineState` as authoritative source of truth.
+- Manages 4 internal CV states:
+  1. `STANDBY`: No active session. Camera handle maintained cleanly. Violation evaluation disabled. No events emitted.
+  2. `ATTACHED_UNCONFIGURED`: Active session attached (`baselineState == "unconfigured"`). Camera active. Posture landmarks processed, but `SlouchRule` does NOT evaluate violations.
+  3. `CAPTURING_BASELINE`: Active session requested baseline (`baselineState == "capturing"`). Captures 30-sample upright pose baseline and posts `baseline_captured` event with baseline metrics.
+  4. `MONITORING_ACTIVE`: Active session has configured baseline (`baselineState == "configured"`). Evaluates `SlouchRule` against persisted baseline and forwards `slouch_violation` / `correction_requested` events over HTTP.
+- Dynamically responds to baseline reset (`configured -> unconfigured`) by clearing local baseline and reverting to `ATTACHED_UNCONFIGURED`.
+- Automatically returns to `STANDBY` when session ends.
+- Survives transient backend network outages with backoff/retry without crashing or fabricating state.
+- Gracefully handles shutdown (SIGINT/SIGTERM): releases OpenCV camera handles and MediaPipe resources cleanly.
+
 
 ### 2.3 Node.js + Express backend
 - Owns the session lifecycle and is the **single source of truth** for state.
@@ -363,21 +362,30 @@ Three cooperating state machines; the **backend session machine is
 authoritative** and the others report into it.
 
 ### 7.1 Backend session state (authoritative)
-`idle → baseline_capturing → monitoring ⇄ blocked → ending → ended`
+
+The session has two decoupled state dimensions:
+
+1. **Session Execution / Hardware State (`state`):**
+   `idle → monitoring ⇄ blocking ⇄ blocked ⇄ unblocking → ending → ended`
 
 | State | Meaning |
 |---|---|
 | `idle` | no active session |
-| `baseline_capturing` | waiting for `baseline_captured` from Python |
-| `monitoring` | normal tracking; violations may trigger `BLOCK` |
+| `monitoring` | active session; violations may trigger `BLOCK` (if baseline is configured) |
 | `blocking` | `BLOCK` sent, awaiting `BLOCK_OK` (transient) |
 | `blocked` | card at screen; correction may trigger `RETRIEVE` |
 | `unblocking` | `RETRIEVE` sent, awaiting `RETRIEVE_OK` (transient) |
 | `ending` | final `RETRIEVE` + cleanup on session end |
 | `ended` | session closed; history/statistics still viewable |
 
-### 7.2 Python detection state (reports upward)
-`idle → capturing_baseline → monitoring → (blocked: still monitoring) → idle`
+2. **Baseline Readiness Metadata (`baselineState`):**
+   - `unconfigured`: Baseline not yet captured or reset. Violation evaluation suppressed.
+   - `capturing`: Baseline capture explicitly requested by user.
+   - `configured`: Baseline captured (`baseline` data object populated). Normal violation evaluation active.
+
+### 7.2 Python detection state (continuous background daemon)
+`STANDBY → ATTACHED_UNCONFIGURED → CAPTURING_BASELINE → MONITORING_ACTIVE → (reset: ATTACHED_UNCONFIGURED) → (session end: STANDBY)`
+
 
 ### 7.3 Arduino arm state (reports upward)
 `DOCKED → BLOCKING → BLOCKED → RETRIEVING → DOCKED`, plus `BUSY` / `FAULT`.

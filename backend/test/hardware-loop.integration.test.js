@@ -46,10 +46,16 @@ function buildApp({ device }) {
   return { app, persistence };
 }
 
-function postEvent(app, type, sessionId = SESSION_UUID) {
+function postEvent(app, type, sessionId = SESSION_UUID, data) {
+  const body = { sessionId, type, timestamp };
+  if (type === 'baseline_captured' && !data) {
+    body.data = { headForward: 0.5, headDrop: 0.2, shoulderRoll: 0.1, sampleCount: 30 };
+  } else if (data) {
+    body.data = data;
+  }
   return request(app)
     .post('/api/events')
-    .send({ sessionId, type, timestamp })
+    .send(body)
     .expect(201);
 }
 
@@ -69,13 +75,13 @@ test('full M4.2 loop: violation blocks, correction unblocks, end returns to dock
   assert.deepEqual(device.sent, ['BLOCK'], 'exactly one BLOCK reaches the arm');
   assert.equal((await activeSession(app)).state, 'blocked');
 
-  // Correction → exactly one RETRIEVE → back to monitoring.
+  // Correction → RETRIEVE → monitoring.
   const correction = await postEvent(app, 'correction_requested');
   assert.equal(correction.body.event.type, 'correction_requested');
-  assert.deepEqual(device.sent, ['BLOCK', 'RETRIEVE'], 'exactly one RETRIEVE follows the BLOCK');
+  assert.deepEqual(device.sent, ['BLOCK', 'RETRIEVE']);
   assert.equal((await activeSession(app)).state, 'monitoring');
 
-  // End session: arm is in the dock, state ended.
+  // End session while monitoring: no extra command needed.
   const end = await request(app).post(`/api/sessions/${SESSION_UUID}/end`).expect(200);
   assert.equal(end.body.session.state, 'ended');
   assert.deepEqual(device.sent, ['BLOCK', 'RETRIEVE'], 'no extra command when ending from monitoring');
@@ -86,16 +92,19 @@ test('real session flow: create → baseline_captured → monitoring → violati
   const device = new FakeSerialDevice();
   const { app } = buildApp({ device });
 
-  // Start a session via the API: it begins in baseline_capturing.
+  // Start a session via the API: it begins in monitoring with baselineState unconfigured.
   const created = await request(app).post('/api/sessions').expect(201);
   const sessionId = created.body.session.id;
-  assert.equal(created.body.session.state, 'baseline_capturing');
-  assert.deepEqual(device.sent, [], 'no hardware command while capturing baseline');
+  assert.equal(created.body.session.state, 'monitoring');
+  assert.equal(created.body.session.baselineState, 'unconfigured');
+  assert.deepEqual(device.sent, [], 'no hardware command on session start');
 
-  // A successful baseline completion moves the real session to monitoring.
+  // A successful baseline completion moves baselineState to configured.
   const baseline = await postEvent(app, 'baseline_captured', sessionId);
   assert.equal(baseline.body.event.type, 'baseline_captured');
-  assert.equal((await activeSession(app)).state, 'monitoring');
+  const active = await activeSession(app);
+  assert.equal(active.state, 'monitoring');
+  assert.equal(active.baselineState, 'configured');
   assert.deepEqual(device.sent, [], 'baseline completion never touches the arm');
 
   // Now the real loop drives the arm: violation blocks, correction unblocks.
@@ -114,19 +123,16 @@ test('real session flow: create → baseline_captured → monitoring → violati
   assert.equal(await activeSession(app), null);
 });
 
-test('a failed baseline: session never reaches monitoring and nothing blocks', async () => {
+test('requesting baseline capture updates baselineState to capturing', async () => {
   const device = new FakeSerialDevice();
   const { app } = buildApp({ device });
 
   const created = await request(app).post('/api/sessions').expect(201);
   const sessionId = created.body.session.id;
 
-  // No baseline_captured event is posted, and a violation arrives early. The
-  // session must stay baseline_capturing and the arm must never move.
-  const violation = await postEvent(app, 'slouch_violation', sessionId);
-  assert.equal(violation.status, 201, 'the event is still recorded');
-  assert.deepEqual(device.sent, [], 'no BLOCK before monitoring');
-  assert.equal((await activeSession(app)).state, 'baseline_capturing');
+  const captureRes = await request(app).post('/api/sessions/active/baseline/capture').expect(200);
+  assert.equal(captureRes.body.session.baselineState, 'capturing');
+  assert.equal((await activeSession(app)).state, 'monitoring');
 });
 
 test('second violation while blocked does not re-BLOCK the arm', async () => {

@@ -238,14 +238,17 @@ test('event service without hardware callbacks records events without hardware a
   assert.equal((await sessionStore.findBySessionId(SESSION_UUID)).state, 'monitoring');
 });
 
-test('baseline_captured moves a real session to monitoring; violations then drive the arm', async () => {
+test('baseline_captured updates baselineState to configured; violations then drive the arm', async () => {
   const device = new FakeSerialDevice({ deferred: true });
-  const { events, sessionStore } = setup({ state: 'baseline_capturing', device });
+  const { events, sessionStore } = setup({ state: 'monitoring', device });
 
-  // Baseline completed: session becomes monitoring, no hardware command yet.
-  const baseline = await events.recordEvent(eventInput('baseline_captured'));
+  // Baseline completed: session baselineState becomes configured, no hardware command yet.
+  const baselineData = { headForward: 0.5, headDrop: 0.2, shoulderRoll: 0.1, sampleCount: 30 };
+  const baseline = await events.recordEvent({ ...eventInput('baseline_captured'), data: baselineData });
   assert.equal(baseline.type, 'baseline_captured');
-  assert.equal((await sessionStore.findBySessionId(SESSION_UUID)).state, 'monitoring');
+  const sessionDoc = await sessionStore.findBySessionId(SESSION_UUID);
+  assert.equal(sessionDoc.state, 'monitoring');
+  assert.equal(sessionDoc.baselineState, 'configured');
 
   // Real slouch in that session: exactly one BLOCK.
   const violation = events.recordEvent(eventInput('slouch_violation'));
@@ -264,22 +267,25 @@ test('baseline_captured moves a real session to monitoring; violations then driv
   assert.equal((await sessionStore.findBySessionId(SESSION_UUID)).state, 'monitoring');
 });
 
-test('a stray baseline_captured while already monitoring persists but changes nothing', async () => {
+test('a stray baseline_captured while already configured persists and updates baseline', async () => {
   const device = new FakeSerialDevice({ deferred: true });
   const { eventStore, events, sessionStore } = setup({ state: 'monitoring', device });
 
-  const event = await events.recordEvent(eventInput('baseline_captured'));
+  const baselineData = { headForward: 0.5, headDrop: 0.2, shoulderRoll: 0.1, sampleCount: 30 };
+  const event = await events.recordEvent({ ...eventInput('baseline_captured'), data: baselineData });
   assert.equal(event.type, 'baseline_captured');
-  assert.equal(eventStore.events.length, 1, 'duplicate baseline event is still recorded');
+  assert.equal(eventStore.events.length, 1, 'baseline event is recorded');
   assert.deepEqual(device.sent, [], 'no hardware command for a baseline event');
   assert.equal((await sessionStore.findBySessionId(SESSION_UUID)).state, 'monitoring');
 });
 
-test('without baseline_captured the session stays baseline_capturing (failed baseline)', async () => {
+test('without baseline_captured the session baselineState stays unconfigured', async () => {
   const device = new FakeSerialDevice({ deferred: true });
-  const { sessionStore } = setup({ state: 'baseline_capturing', device });
+  const { sessionStore } = setup({ state: 'monitoring', device });
 
   // No baseline event was posted (e.g. the capture failed/timed out) — the
-  // session must remain exactly where it was, in baseline_capturing.
-  assert.equal((await sessionStore.findBySessionId(SESSION_UUID)).state, 'baseline_capturing');
+  // session baselineState remains unconfigured.
+  const doc = await sessionStore.findBySessionId(SESSION_UUID);
+  assert.equal(doc.state, 'monitoring');
+  assert.equal(doc.baselineState || 'unconfigured', 'unconfigured');
 });

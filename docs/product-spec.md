@@ -53,13 +53,17 @@ making the corrective action immediately and physically salient.
 ## 3. User Flow — From Starting a Session to Correction
 
 1. **Start a session.** The user opens the PostureGuard dashboard (web app) and
-   starts a monitoring session.
-2. **Establish baseline.** The user sits upright for a few seconds while the
-   webcam streams video. The Python computer vision module captures this
-   upright pose and establishes the user's personalized posture baseline for
-   the session.
-3. **Continuous monitoring.** The webcam keeps capturing video. The Python
-   module continuously evaluates:
+   starts a session. The session becomes active (`state: monitoring`,
+   `baselineState: unconfigured`). Starting a session does NOT automatically
+   capture a posture baseline.
+2. **Establish posture baseline.** The user explicitly requests baseline capture
+   from the dashboard (`baselineState: capturing`). The user sits upright for a
+   few seconds while the running computer vision module captures this upright pose
+   and establishes the personalized posture baseline (`baselineState: configured`).
+   The baseline can be captured or reset independently of starting the session.
+3. **Continuous monitoring.** The webcam keeps capturing video. Posture violation
+   evaluation is suppressed until `baselineState` is `configured`. Once configured,
+   the Python module continuously evaluates:
    - pose (posture) via MediaPipe Pose, and
    - phone + hand interaction via YOLOv8 Nano with MediaPipe Hands.
 4. **Violation detection.** The module flags a violation only when a condition
@@ -93,10 +97,11 @@ making the corrective action immediately and physically salient.
 
 ### 4.1 Session management
 - FR-01 — The user can start and stop a monitoring session from the dashboard.
-- FR-02 — On session start, the system captures an upright posture baseline for
-  the current user/session.
-- FR-03 — The system exposes the current session's status (monitoring, blocked,
-  idle).
+- FR-02 — The user can explicitly request or reset an upright posture baseline
+  for the active session. Starting a session does NOT automatically capture a
+  baseline.
+- FR-03 — The system exposes the current session's status (execution state,
+  baseline readiness, blocking status).
 
 ### 4.2 Vision-based detection (Python)
 - FR-04 — The webcam feed is continuously captured while a session is active.
@@ -203,9 +208,10 @@ Node.js/Express Backend ─────────┘
 
 ## 7. Data and Event Flow
 
-1. **Baseline:** On session start, the Python module captures the user's upright
-   pose from the webcam and stores it as the session baseline (kept in memory /
-   session context).
+1. **Baseline:** Captured upon explicit user request during an active session
+   (not automatically on session start). The Python module captures the user's
+   upright pose, sends `baseline_captured` with posture features to the backend,
+   and the backend transitions `baselineState` to `configured`.
 2. **Detection:** The Python module continuously runs pose and phone detection;
    its timer/debounce logic decides whether to raise an event.
 3. **Violation event (Python → Backend):** On confirmation, Python POSTs the

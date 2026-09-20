@@ -43,21 +43,33 @@ function inMemoryStore(seed) {
 
 const fixedNow = () => new Date('2026-03-01T10:00:00.000Z');
 
-test('createSession creates and persists a baseline_capturing session', async () => {
+test('createSession creates and persists a monitoring session with unconfigured baseline', async () => {
   const store = inMemoryStore();
   const service = createSessionService({ store, now: fixedNow });
 
   const session = await service.createSession();
 
   assert.ok(session.sessionId, 'session has an id');
-  assert.equal(session.state, 'baseline_capturing');
+  assert.equal(session.state, 'monitoring');
+  assert.equal(session.baselineState, 'unconfigured');
+  assert.equal(session.baseline, null);
+  assert.ok(session.friendlyName.startsWith('Session on '), 'has generated friendlyName');
   assert.equal(session.createdAt.getTime(), fixedNow().getTime());
   assert.equal(session.updatedAt.getTime(), fixedNow().getTime());
   assert.equal(session.endedAt, null);
 
   const persisted = await store.findBySessionId(session.sessionId);
   assert.ok(persisted, 'session was persisted');
-  assert.equal(persisted.state, 'baseline_capturing');
+  assert.equal(persisted.state, 'monitoring');
+  assert.equal(persisted.baselineState, 'unconfigured');
+});
+
+test('createSession accepts an optional custom friendlyName', async () => {
+  const store = inMemoryStore();
+  const service = createSessionService({ store, now: fixedNow });
+
+  const session = await service.createSession({ friendlyName: 'Morning Work' });
+  assert.equal(session.friendlyName, 'Morning Work');
 });
 
 test('createSession rejects when a session is already active', async () => {
@@ -79,8 +91,50 @@ test('getActiveSession returns the active session or null', async () => {
   assert.equal(await empty.getActiveSession(), null);
 });
 
+test('requestBaselineCapture transitions baselineState to capturing', async () => {
+  const active = { sessionId: 'd73b3e3e-6dd2-4f61-9d3e-2b7f4f4c2b3a', state: 'monitoring', baselineState: 'unconfigured', createdAt: new Date('2026-01-01T00:00:00.000Z'), updatedAt: new Date('2026-01-01T00:00:00.000Z'), endedAt: null };
+  const store = inMemoryStore(active);
+  const service = createSessionService({ store, now: fixedNow });
+
+  const updated = await service.requestBaselineCapture(active.sessionId);
+  assert.equal(updated.baselineState, 'capturing');
+  assert.equal(updated.state, 'monitoring');
+});
+
+test('resetBaseline clears baseline and transitions baselineState to unconfigured', async () => {
+  const configured = {
+    sessionId: 'd73b3e3e-6dd2-4f61-9d3e-2b7f4f4c2b3a',
+    state: 'monitoring',
+    baselineState: 'configured',
+    baseline: { headForward: 0.5, headDrop: 0.2, shoulderRoll: 0.1, sampleCount: 30 },
+    createdAt: new Date('2026-01-01T00:00:00.000Z'),
+    updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+    endedAt: null,
+  };
+  const store = inMemoryStore(configured);
+  const service = createSessionService({ store, now: fixedNow });
+
+  const reset = await service.resetBaseline(configured.sessionId);
+  assert.equal(reset.baselineState, 'unconfigured');
+  assert.equal(reset.baseline, null);
+  assert.equal(reset.state, 'monitoring');
+});
+
+test('markBaselineCaptured transitions baselineState to configured and saves baseline data', async () => {
+  const capturing = { sessionId: 'd73b3e3e-6dd2-4f61-9d3e-2b7f4f4c2b3a', state: 'monitoring', baselineState: 'capturing', createdAt: new Date('2026-01-01T00:00:00.000Z'), updatedAt: new Date('2026-01-01T00:00:00.000Z'), endedAt: null };
+  const store = inMemoryStore(capturing);
+  const service = createSessionService({ store, now: fixedNow });
+
+  const baselineData = { headForward: 0.45, headDrop: 0.12, shoulderRoll: 0.05, sampleCount: 30 };
+  const configured = await service.markBaselineCaptured(capturing.sessionId, baselineData);
+
+  assert.equal(configured.baselineState, 'configured');
+  assert.deepEqual(configured.baseline, baselineData);
+  assert.equal(configured.state, 'monitoring');
+});
+
 test('endSession transitions through ending to ended and persists both', async () => {
-  const active = { sessionId: 'd73b3e3e-6dd2-4f61-9d3e-2b7f4f4c2b3a', state: 'baseline_capturing', createdAt: new Date('2026-01-01T00:00:00.000Z'), updatedAt: new Date('2026-01-01T00:00:00.000Z'), endedAt: null };
+  const active = { sessionId: 'd73b3e3e-6dd2-4f61-9d3e-2b7f4f4c2b3a', state: 'monitoring', createdAt: new Date('2026-01-01T00:00:00.000Z'), updatedAt: new Date('2026-01-01T00:00:00.000Z'), endedAt: null };
   const store = inMemoryStore(active);
   const service = createSessionService({ store, now: fixedNow });
 
@@ -109,47 +163,4 @@ test('endSession rejects an already-ended session', async () => {
 
   await assert.rejects(service.endSession(ended.sessionId), InvalidSessionTransitionError);
   assert.equal(store.calls.length, 0);
-});
-
-test('markBaselineCaptured transitions baseline_capturing to monitoring and persists it', async () => {
-  const capturing = { sessionId: 'd73b3e3e-6dd2-4f61-9d3e-2b7f4f4c2b3a', state: 'baseline_capturing', createdAt: new Date('2026-01-01T00:00:00.000Z'), updatedAt: new Date('2026-01-01T00:00:00.000Z'), endedAt: null };
-  const store = inMemoryStore(capturing);
-  const service = createSessionService({ store, now: fixedNow });
-
-  const monitoring = await service.markBaselineCaptured(capturing.sessionId);
-
-  assert.equal(monitoring.state, 'monitoring');
-  assert.equal(monitoring.updatedAt.getTime(), fixedNow().getTime());
-  assert.deepEqual(store.calls.map((c) => c.changes.state), ['monitoring']);
-
-  const persisted = await store.findBySessionId(capturing.sessionId);
-  assert.equal(persisted.state, 'monitoring');
-});
-
-test('markBaselineCaptured works without hardware configured', async () => {
-  const capturing = { sessionId: 'd73b3e3e-6dd2-4f61-9d3e-2b7f4f4c2b3a', state: 'baseline_capturing', createdAt: new Date('2026-01-01T00:00:00.000Z'), updatedAt: new Date('2026-01-01T00:00:00.000Z'), endedAt: null };
-  const store = inMemoryStore(capturing);
-  const service = createSessionService({ store, now: fixedNow });
-
-  const monitoring = await service.markBaselineCaptured(capturing.sessionId);
-  assert.equal(monitoring.state, 'monitoring');
-});
-
-test('markBaselineCaptured rejects an unknown session', async () => {
-  const store = inMemoryStore();
-  const service = createSessionService({ store, now: fixedNow });
-
-  await assert.rejects(service.markBaselineCaptured('no-such-session'), SessionNotFoundError);
-  assert.equal(store.calls.length, 0);
-});
-
-test('markBaselineCaptured rejects a session that is not capturing', async () => {
-  for (const state of ['monitoring', 'blocked', 'ending', 'ended']) {
-    const sessionDoc = { sessionId: 'd73b3e3e-6dd2-4f61-9d3e-2b7f4f4c2b3a', state, createdAt: new Date('2026-01-01T00:00:00.000Z'), updatedAt: new Date('2026-01-01T00:00:00.000Z'), endedAt: state === 'ended' ? new Date('2026-01-01T00:00:00.000Z') : null };
-    const store = inMemoryStore(sessionDoc);
-    const service = createSessionService({ store, now: fixedNow });
-
-    await assert.rejects(service.markBaselineCaptured(sessionDoc.sessionId), InvalidSessionTransitionError);
-    assert.equal(store.calls.length, 0, `no state change for ${state}`);
-  }
 });

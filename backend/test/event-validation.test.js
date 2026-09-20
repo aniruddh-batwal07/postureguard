@@ -33,10 +33,28 @@ test('accepts a valid correction_requested event', () => {
 });
 
 test('accepts a valid baseline_captured event', () => {
-  const result = validateEvent(validBody({ type: 'baseline_captured' }), { now: () => NOW });
+  const data = { headForward: 0.45, headDrop: 0.15, shoulderRoll: 0.08, sampleCount: 30 };
+  const result = validateEvent(validBody({ type: 'baseline_captured', data }), { now: () => NOW });
 
   assert.equal(result.ok, true);
   assert.equal(result.value.type, 'baseline_captured');
+  assert.equal(result.value.data.headForward, 0.45);
+});
+
+test('rejects baseline_captured with missing or malformed baseline data', () => {
+  const invalidPayloads = [
+    undefined,
+    null,
+    'not-an-object',
+    { headForward: 'invalid' },
+    { headForward: 0.5, headDrop: NaN },
+    { headForward: 0.5, headDrop: 0.2, shoulderRoll: 0.1, sampleCount: 0 },
+  ];
+
+  for (const data of invalidPayloads) {
+    const result = validateEvent(validBody({ type: 'baseline_captured', data }), { now: () => NOW });
+    assert.equal(result.ok, false, `should reject data = ${JSON.stringify(data)}`);
+  }
 });
 
 test('accepts an optional data object (uppercase uuid is fine)', () => {

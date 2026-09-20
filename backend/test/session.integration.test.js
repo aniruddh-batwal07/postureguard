@@ -49,13 +49,16 @@ test('POST /api/sessions creates and persists a session in MongoDB', async (t) =
   const res = await request(testApp()).post('/api/sessions');
 
   assert.equal(res.status, 201);
-  assert.equal(res.body.session.state, 'baseline_capturing');
+  assert.equal(res.body.session.state, 'monitoring');
+  assert.equal(res.body.session.baselineState, 'unconfigured');
+  assert.equal(res.body.session.baseline, null);
   assert.equal(res.body.session.endedAt, null);
   assert.ok(res.body.session.id, 'session has an id');
 
   const persisted = await findPersisted(res.body.session.id);
   assert.ok(persisted, 'session document persisted in MongoDB');
-  assert.equal(persisted.state, 'baseline_capturing');
+  assert.equal(persisted.state, 'monitoring');
+  assert.equal(persisted.baselineState, 'unconfigured');
   assert.equal(persisted.state, res.body.session.state);
 });
 
@@ -72,7 +75,8 @@ test('GET /api/sessions/active returns the active session', async (t) => {
 
   const res = await request(testApp()).get('/api/sessions/active');
   assert.equal(res.status, 200);
-  assert.equal(res.body.session.state, 'baseline_capturing');
+  assert.equal(res.body.session.state, 'monitoring');
+  assert.equal(res.body.session.baselineState, 'unconfigured');
 });
 
 test('POST /api/sessions/:id/end transitions through ending to ended and persists it', async (t) => {
@@ -117,5 +121,5 @@ test('a new session can be created after the previous one ended', async (t) => {
 
   const res = await request(testApp()).post('/api/sessions');
   assert.equal(res.status, 201);
-  assert.equal(res.body.session.state, 'baseline_capturing');
+  assert.equal(res.body.session.state, 'monitoring');
 });

@@ -46,7 +46,22 @@ function createSessionStore(persistence) {
     }
   }
 
-  return { insert, findBySessionId, findActive, updateState };
+  async function findHistory({ limit = 20, skip = 0 } = {}) {
+    try {
+      const parsedLimit = Math.max(1, Math.min(Number(limit) || 20, 100));
+      const parsedSkip = Math.max(0, Number(skip) || 0);
+      return await collection()
+        .find({ state: 'ended' })
+        .sort({ createdAt: -1 })
+        .skip(parsedSkip)
+        .limit(parsedLimit)
+        .toArray();
+    } catch (err) {
+      throw toMongoUnavailable(err);
+    }
+  }
+
+  return { insert, findBySessionId, findActive, updateState, findHistory };
 }
 
 module.exports = { createSessionStore };

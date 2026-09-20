@@ -26,7 +26,10 @@ function fakePersistence() {
 function session(overrides = {}) {
   return {
     sessionId: SESSION_UUID,
+    friendlyName: 'Session on Mar 1, 2026 at 10:00 AM',
     state: 'monitoring',
+    baselineState: 'unconfigured',
+    baseline: null,
     createdAt: new Date('2026-03-01T10:00:00.000Z'),
     updatedAt: new Date('2026-03-01T10:00:00.000Z'),
     endedAt: null,
@@ -36,8 +39,11 @@ function session(overrides = {}) {
 
 function fakeService(overrides = {}) {
   return {
-    createSession: overrides.createSession || (async () => session({ state: 'baseline_capturing' })),
+    createSession: overrides.createSession || (async ({ friendlyName } = {}) => session({ friendlyName: friendlyName || 'Session on Mar 1, 2026 at 10:00 AM' })),
     getActiveSession: overrides.getActiveSession || (async () => null),
+    requestBaselineCapture: overrides.requestBaselineCapture || (async () => session({ baselineState: 'capturing' })),
+    resetBaseline: overrides.resetBaseline || (async () => session({ baselineState: 'unconfigured', baseline: null })),
+    getHistory: overrides.getHistory || (async () => [session({ state: 'ended', endedAt: new Date('2026-03-01T11:00:00.000Z') })]),
     endSession: overrides.endSession || (async () => session({ state: 'ended', endedAt: new Date('2026-03-01T11:00:00.000Z') })),
   };
 }
@@ -51,9 +57,56 @@ test('POST /api/sessions creates a session and returns 201', async () => {
 
   assert.equal(res.status, 201);
   assert.equal(res.body.session.id, SESSION_UUID);
-  assert.equal(res.body.session.state, 'baseline_capturing');
+  assert.equal(res.body.session.state, 'monitoring');
+  assert.equal(res.body.session.baselineState, 'unconfigured');
+  assert.equal(res.body.session.baseline, null);
+  assert.ok(res.body.session.friendlyName, 'has friendlyName');
   assert.equal(res.body.session.endedAt, null);
   assert.match(res.body.session.createdAt, /2026-03-01T10:00:00/);
+});
+
+test('POST /api/sessions accepts an optional friendlyName body', async () => {
+  const res = await request(app()).post('/api/sessions').send({ friendlyName: 'Custom Session' });
+
+  assert.equal(res.status, 201);
+  assert.equal(res.body.session.friendlyName, 'Custom Session');
+});
+
+test('POST /api/sessions/active/baseline/capture transitions baselineState to capturing', async () => {
+  const res = await request(app({
+    getActiveSession: async () => session(),
+  })).post('/api/sessions/active/baseline/capture');
+
+  assert.equal(res.status, 200);
+  assert.equal(res.body.session.baselineState, 'capturing');
+});
+
+test('POST /api/sessions/active/baseline/capture returns 404 when no active session', async () => {
+  const res = await request(app({
+    getActiveSession: async () => null,
+  })).post('/api/sessions/active/baseline/capture');
+
+  assert.equal(res.status, 404);
+  assert.equal(res.body.error, 'no active session');
+});
+
+test('POST /api/sessions/active/baseline/reset transitions baselineState to unconfigured', async () => {
+  const res = await request(app({
+    getActiveSession: async () => session({ baselineState: 'configured' }),
+  })).post('/api/sessions/active/baseline/reset');
+
+  assert.equal(res.status, 200);
+  assert.equal(res.body.session.baselineState, 'unconfigured');
+  assert.equal(res.body.session.baseline, null);
+});
+
+test('GET /api/sessions/history returns ended sessions', async () => {
+  const res = await request(app()).get('/api/sessions/history');
+
+  assert.equal(res.status, 200);
+  assert.ok(Array.isArray(res.body.sessions));
+  assert.equal(res.body.sessions.length, 1);
+  assert.equal(res.body.sessions[0].id, SESSION_UUID);
 });
 
 test('POST /api/sessions maps ActiveSessionExistsError to 409', async () => {

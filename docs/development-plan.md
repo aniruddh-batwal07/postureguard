@@ -78,17 +78,17 @@ Phases 1 and 2 can run in parallel after Phase 0; Phase 3 needs both. Phase 4 ne
 - **Definition of done:** health endpoint tested and green; Mongo failure path established.
 
 ### M1.2 — Session state machine + session API
-- **Objective:** backend owns the authoritative session lifecycle (`architecture.md` §7.1) with persistence.
+- **Objective:** backend owns the authoritative session lifecycle (`architecture.md` §7.1) with persistence and decoupled baseline readiness.
 - **Files/modules:** `backend/src/sessions/`, `routes/sessions`, `persistence/`.
-- **Expected behavior:** `POST /api/sessions`, `GET /api/sessions/active`, `POST /api/sessions/:id/end`; FSM transitions `idle→baseline_capturing→monitoring→…→ended`; sequences persisted in Mongo.
-- **Tests/verification:** unit tests on every FSM transition; integration tests for persistence and invalid-call rejection.
-- **Blocking ADRs:** none (state machine shape already defined in `architecture.md`).
+- **Expected behavior:** `POST /api/sessions`, `GET /api/sessions/active`, `POST /api/sessions/:id/end`, `POST /api/sessions/active/baseline/capture`, `POST /api/sessions/active/baseline/reset`, `GET /api/sessions/history`; FSM transitions `idle→monitoring→…→ended`; baseline metadata `unconfigured→capturing→configured`; sequences persisted in Mongo.
+- **Tests/verification:** unit tests on FSM transitions and baseline state methods; integration tests for persistence, history, and invalid-call rejection.
+- **Blocking ADRs:** none (state machine shape defined in `architecture.md`).
 - **Definition of done:** full session lifecycle works over HTTP with Mongo persistence, verified by tests.
 
 ### M1.3 — Dashboard skeleton
 - **Objective:** React + Vite app that can start/end sessions and show status.
 - **Files/modules:** `web/src/pages/`, `components/`, `api/`, `hooks/`.
-- **Expected behavior:** "Start session" button → session begins; status shows `baseline_capturing`/`monitoring`; "End" ends it.
+- **Expected behavior:** "Start session" button → session begins in `monitoring` (`baselineState: unconfigured`); baseline capture/reset actions trigger baseline endpoints; "End" ends it.
 - **Tests/verification:** Vitest + React Testing Library with mocked API client.
 - **Blocking ADRs:** ADR-1 (choose SSE vs polling — even if only adopted later, the API shape depends on it), ADR-10.
 - **Definition of done:** dashboard drives the session API and renders state from it.

@@ -49,6 +49,9 @@ class FailingDetector:
         return None
 
 
+
+
+
 def test_run_opens_camera_resolves_session_and_releases():
     backend = MockBackend()
     try:
