@@ -105,9 +105,9 @@ bool wrist3IsPositional = false;
 // Gripper Claw Settings (Channel 5 - MG90S Positional Servo)
 bool isPositional180Mode   = true;  
 bool gripperHoldPower      = false; // Cut PWM after move: prevents motor from stalling and overheating
-int gripperOpenAngle       = 75;    // Calibrated gentle open angle (~2cm gap; avoids over-opening & linkage strain)
-int gripperCloseAngle      = 40;    // Calibrated clamp angle (claw tips firmly meet)
-int angleCh5               = 40;    // Default closed
+int gripperOpenAngle       = 30;    // User calibrated: half open (~2cm gap), exactly desired max open
+int gripperCloseAngle      = 10;    // Calibrated clamp angle
+int angleCh5               = 10;    // Default closed
 bool gripperIsOpen         = false;
 
 // Arm Operational States per docs/architecture.md §4.3
@@ -317,7 +317,7 @@ void moveWrist3ToAngle(int targetAngle) {
 // Direct pulse drive delivers 100% full motor torque to overcome
 // linkage gear mesh friction without stalling or weak creep.
 void moveGripperPositional(int targetAngle) {
-  targetAngle = constrain(targetAngle, 10, 170);
+  targetAngle = constrain(targetAngle, 0, 180);
 
   pwm.setPWM(CH_GRIPPER, 0, angleToPulse(targetAngle));
   delay(420); // Settle time for full claw stroke
@@ -726,11 +726,11 @@ void loop() {
       Serial.println(F("CLOSE_OK"));
     }
     else if (input.startsWith("SETOPEN ")) {
-      gripperOpenAngle = constrain(input.substring(8).toInt(), 10, 170);
+      gripperOpenAngle = constrain(input.substring(8).toInt(), 0, 180);
       Serial.println(F("SETOPEN_OK"));
     }
     else if (input.startsWith("SETCLOSE ")) {
-      gripperCloseAngle = constrain(input.substring(9).toInt(), 10, 170);
+      gripperCloseAngle = constrain(input.substring(9).toInt(), 0, 180);
       Serial.println(F("SETCLOSE_OK"));
     }
     else if (input == "GETGRIPPER") {

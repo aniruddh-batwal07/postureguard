@@ -109,21 +109,21 @@ def main():
             time.sleep(0.02)
         return resp
 
-    current_ang = 90
-    print(f"\nMoving claw to safe neutral center: {current_ang}°...")
+    current_ang = 30
+    print(f"\nMoving claw to your calibrated OPEN position: {current_ang}° (half open)...")
     send_cmd(f"5 {current_ang}")
 
-    saved_open = None
+    saved_open = 30
     saved_close = None
 
     print("\n" + "=" * 65)
-    print(" Controls:")
-    print("   [+] or [u] : +3° (nudge higher)")
-    print("   [-] or [d] : -3° (nudge lower)")
-    print("   [number]   : jump to exact angle (e.g. 85, 95, 105)")
+    print(" Controls (Claw Closing Range: 0° to 35°):")
+    print("   [-] or [d] : Step DOWN by -2° (CLOSES the claw: 28°, 26°, 24°...)")
+    print("   [+] or [u] : Step UP by +2° (OPENS the claw towards 30°)")
+    print("   [number]   : jump to exact angle (e.g. 20, 15, 10, 5, 0)")
     print("   [c]        : save current angle as CLOSE")
-    print("   [o]        : save current angle as OPEN")
-    print("   [t]        : test Open <-> Close cycle")
+    print("   [o]        : save current angle as OPEN (default: 30°)")
+    print("   [t]        : test Open (30°) <-> Close cycle")
     print("   [s]        : save & flash to Arduino permanently")
     print("   [q]        : quit")
     print("=" * 65)
@@ -132,27 +132,27 @@ def main():
         while True:
             c_str = f" [CLOSE={saved_close}°]" if saved_close is not None else " [CLOSE not set]"
             o_str = f" [OPEN={saved_open}°]" if saved_open is not None else " [OPEN not set]"
-            prompt = f"\n[Angle: {current_ang}°]{c_str}{o_str}\nEnter command (+, -, angle, c, o, t, s, q): "
+            prompt = f"\n[Current Angle: {current_ang}°]{o_str}{c_str}\nEnter command (-, +, angle 0-35, c, o, t, s, q): "
             user_in = input(prompt).strip().lower()
 
             if not user_in or user_in == 'q':
                 break
             elif user_in in ['+', 'u']:
-                current_ang = min(150, current_ang + 3)
-                print(f"--> Nudging to {current_ang}°")
+                current_ang = min(40, current_ang + 2)
+                print(f"--> Moving to {current_ang}°")
                 send_cmd(f"5 {current_ang}")
             elif user_in in ['-', 'd']:
-                current_ang = max(30, current_ang - 3)
-                print(f"--> Nudging to {current_ang}°")
+                current_ang = max(0, current_ang - 2)
+                print(f"--> Closing to {current_ang}°")
                 send_cmd(f"5 {current_ang}")
             elif user_in.isdigit():
                 val = int(user_in)
-                if 30 <= val <= 150:
+                if 0 <= val <= 45:
                     current_ang = val
                     print(f"--> Moving to {current_ang}°")
                     send_cmd(f"5 {current_ang}")
                 else:
-                    print("Please enter a safe angle between 30 and 150.")
+                    print("Please enter an angle between 0 and 45 to protect the linkage.")
             elif user_in == 'c':
                 saved_close = current_ang
                 print(f"[+] Saved CLOSE angle = {saved_close}°")
