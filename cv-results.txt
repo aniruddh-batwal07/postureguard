@@ -1,0 +1,15 @@
+============================= test session starts =============================
+platform win32 -- Python 3.12.14, pytest-9.1.1, pluggy-1.6.0
+rootdir: C:\Rishabh\RKDM\postureguard_repo\cv
+configfile: pyproject.toml
+collected 127 items / 5 deselected / 122 selected
+
+test\test_camera.py .......                                              [  5%]
+test\test_capture.py ..........                                          [ 13%]
+test\test_events.py .....                                                [ 18%]
+test\test_pose.py .....................................                  [ 48%]
+test\test_rules.py ...........................                           [ 70%]
+test\test_service.py ...........                                         [ 79%]
+test\test_settings.py .........................                          [100%]
+
+===================== 122 passed, 5 deselected in 13.01s ======================
