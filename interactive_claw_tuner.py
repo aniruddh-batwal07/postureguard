@@ -1,11 +1,15 @@
 """PostureGuard - Interactive Real-Time Claw Tuner.
 
-Safely tunes Channel 5 (Gripper Claw) in gentle 3°-5° steps around center (90°)
+Safely tunes Channel 5 (Gripper Claw) in gentle 2°-3° steps
 so you can find the exact Close and Open angles WITHOUT mechanical over-travel or jamming.
+
+Supports negative angles down to -25° (sub-140 pulse range) so claw tips can touch tightly.
 
 Features:
 - Automatically frees COM13 if backend is running
-- Moves in tiny, safe increments (+3° / -3°)
+- Moves in tiny increments (+2° / -2°) down to -25°
+- Supports direct angle jump (e.g. 30, 15, 0, -5, -10, -15)
+- Supports direct raw PCA9685 pulse command (e.g. p 120, p 100)
 - Automatically saves your chosen angles to firmware and flashes the board
 """
 
@@ -41,10 +45,10 @@ def update_firmware_and_flash(open_angle, close_angle):
             lines = f.readlines()
         new_lines = []
         for line in lines:
-            if "int gripperOpenAngle" in line:
-                new_lines.append(f"int gripperOpenAngle       = {open_angle};   // Calibrated gentle open\n")
-            elif "int gripperCloseAngle" in line:
-                new_lines.append(f"int gripperCloseAngle      = {close_angle};   // Calibrated clamp angle\n")
+            if "int gripperOpenAngle" in line and "=" in line and ";" in line:
+                new_lines.append(f"int gripperOpenAngle       = {open_angle};    // User calibrated: half open (~2cm gap), exactly desired max open\n")
+            elif "int gripperCloseAngle" in line and "=" in line and ";" in line:
+                new_lines.append(f"int gripperCloseAngle      = {close_angle};   // Calibrated clamp angle (sub-zero allows claw tips to meet tightly)\n")
             elif "int angleCh5" in line and "=" in line and ";" in line:
                 new_lines.append(f"int angleCh5               = {close_angle};   // Default closed\n")
             else:
@@ -68,9 +72,15 @@ def update_firmware_and_flash(open_angle, close_angle):
         print("[!] Flashing failed. Please check connection.")
         return False
 
+def angle_to_pulse(ang):
+    return int(round(140 + (ang * (520 - 140) / 180)))
+
+def pulse_to_angle(p):
+    return int(round((p - 140) * 180 / (520 - 140)))
+
 def main():
     print("=" * 65)
-    print(" PostureGuard - Live Interactive Claw Tuner")
+    print(" PostureGuard - Live Interactive Claw Tuner (with Sub-Zero Range)")
     print("=" * 65)
     print("\nIMPORTANT BEFORE STARTING:")
     print("If your claw is currently jammed in the wide-open position:")
@@ -110,17 +120,18 @@ def main():
         return resp
 
     current_ang = 30
-    print(f"\nMoving claw to your calibrated OPEN position: {current_ang}° (half open)...")
+    print(f"\nMoving claw to your calibrated OPEN position: {current_ang}° (Pulse {angle_to_pulse(current_ang)})...")
     send_cmd(f"5 {current_ang}")
 
     saved_open = 30
-    saved_close = None
+    saved_close = -10
 
     print("\n" + "=" * 65)
-    print(" Controls (Claw Closing Range: 0° to 35°):")
-    print("   [-] or [d] : Step DOWN by -2° (CLOSES the claw: 28°, 26°, 24°...)")
+    print(" Controls (Claw Closing Range: -25° to 35°):")
+    print("   [-] or [d] : Step DOWN by -2° (CLOSES the claw: 28°, 26° ... 0°, -2°, -4°...)")
     print("   [+] or [u] : Step UP by +2° (OPENS the claw towards 30°)")
-    print("   [number]   : jump to exact angle (e.g. 20, 15, 10, 5, 0)")
+    print("   [number]   : jump to exact angle (e.g. 20, 10, 0, -5, -10, -15)")
+    print("   p [pulse]  : send direct PCA9685 pulse count (e.g. p 120, p 105, p 90)")
     print("   [c]        : save current angle as CLOSE")
     print("   [o]        : save current angle as OPEN (default: 30°)")
     print("   [t]        : test Open (30°) <-> Close cycle")
@@ -132,33 +143,48 @@ def main():
         while True:
             c_str = f" [CLOSE={saved_close}°]" if saved_close is not None else " [CLOSE not set]"
             o_str = f" [OPEN={saved_open}°]" if saved_open is not None else " [OPEN not set]"
-            prompt = f"\n[Current Angle: {current_ang}°]{o_str}{c_str}\nEnter command (-, +, angle 0-35, c, o, t, s, q): "
+            cur_p = angle_to_pulse(current_ang)
+            prompt = f"\n[Angle: {current_ang}°, Pulse: {cur_p}]{o_str}{c_str}\nEnter command (-, +, angle -25 to 35, p <pulse>, c, o, t, s, q): "
             user_in = input(prompt).strip().lower()
 
             if not user_in or user_in == 'q':
                 break
             elif user_in in ['+', 'u']:
-                current_ang = min(40, current_ang + 2)
-                print(f"--> Moving to {current_ang}°")
+                current_ang = min(35, current_ang + 2)
+                cur_p = angle_to_pulse(current_ang)
+                print(f"--> Moving to {current_ang}° (Pulse {cur_p})")
                 send_cmd(f"5 {current_ang}")
             elif user_in in ['-', 'd']:
-                current_ang = max(0, current_ang - 2)
-                print(f"--> Closing to {current_ang}°")
+                current_ang = max(-25, current_ang - 2)
+                cur_p = angle_to_pulse(current_ang)
+                print(f"--> Closing to {current_ang}° (Pulse {cur_p})")
                 send_cmd(f"5 {current_ang}")
-            elif user_in.isdigit():
+            elif user_in.startswith("p "):
+                try:
+                    pulse_val = int(user_in.split()[1])
+                    if 60 <= pulse_val <= 600:
+                        current_ang = pulse_to_angle(pulse_val)
+                        print(f"--> Sending raw pulse {pulse_val} (equiv angle ~{current_ang}°)...")
+                        send_cmd(f"PULSE 5 {pulse_val}")
+                    else:
+                        print("Please enter a pulse between 60 and 600.")
+                except ValueError:
+                    print("Invalid pulse value.")
+            elif user_in.replace('-', '', 1).isdigit():
                 val = int(user_in)
-                if 0 <= val <= 45:
+                if -25 <= val <= 35:
                     current_ang = val
-                    print(f"--> Moving to {current_ang}°")
+                    cur_p = angle_to_pulse(current_ang)
+                    print(f"--> Moving to {current_ang}° (Pulse {cur_p})")
                     send_cmd(f"5 {current_ang}")
                 else:
-                    print("Please enter an angle between 0 and 45 to protect the linkage.")
+                    print("Please enter an angle between -25° and 35° to protect the linkage.")
             elif user_in == 'c':
                 saved_close = current_ang
-                print(f"[+] Saved CLOSE angle = {saved_close}°")
+                print(f"[+] Saved CLOSE angle = {saved_close}° (Pulse {angle_to_pulse(saved_close)})")
             elif user_in == 'o':
                 saved_open = current_ang
-                print(f"[+] Saved OPEN angle = {saved_open}°")
+                print(f"[+] Saved OPEN angle = {saved_open}° (Pulse {angle_to_pulse(saved_open)})")
             elif user_in == 't':
                 if saved_open is None or saved_close is None:
                     print("[!] Please set both [o] (open) and [c] (close) before testing cycle.")

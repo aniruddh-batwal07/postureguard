@@ -106,8 +106,8 @@ bool wrist3IsPositional = false;
 bool isPositional180Mode   = true;  
 bool gripperHoldPower      = false; // Cut PWM after move: prevents motor from stalling and overheating
 int gripperOpenAngle       = 30;    // User calibrated: half open (~2cm gap), exactly desired max open
-int gripperCloseAngle      = 10;    // Calibrated clamp angle
-int angleCh5               = 10;    // Default closed
+int gripperCloseAngle      = -10;   // Calibrated clamp angle (sub-zero allows claw tips to meet tightly)
+int angleCh5               = -10;   // Default closed
 bool gripperIsOpen         = false;
 
 // Arm Operational States per docs/architecture.md §4.3
@@ -136,7 +136,7 @@ struct PersistedArmState {
   uint8_t ch2;        // elbow
   uint8_t ch3;        // wrist roll reference
   uint8_t ch4;        // wrist pitch
-  uint8_t ch5;        // gripper
+  int8_t  ch5;        // gripper (allows negative angles for tight clamp)
 };
 
 const uint8_t PERSIST_MAGIC  = 0xA5;
@@ -153,7 +153,7 @@ void persistState() {
   s.ch2        = (uint8_t)angleCh2;
   s.ch3        = (uint8_t)wrist3Angle;
   s.ch4        = (uint8_t)angleCh4;
-  s.ch5        = (uint8_t)angleCh5;
+  s.ch5        = (int8_t)angleCh5;
   EEPROM.put(PERSIST_ADDR, s);
 }
 
@@ -173,7 +173,7 @@ bool restoreState() {
   angleCh2             = constrain(s.ch2, 0, 180);
   wrist3Angle          = constrain(s.ch3, 0, 180);
   angleCh4             = constrain(s.ch4, 0, 180);
-  angleCh5             = constrain(s.ch5, 0, 180);
+  angleCh5             = constrain((int)s.ch5, -25, 180);
   gripperIsOpen        = (angleCh5 >= gripperOpenAngle);
   return true;
 }
@@ -200,7 +200,7 @@ void executeRetrieve();
 void printStatus();
 
 int angleToPulse(int ang) {
-  ang = constrain(ang, 0, 180);
+  ang = constrain(ang, -25, 180);
   return map(ang, 0, 180, SERVOMIN, SERVOMAX);
 }
 
@@ -317,7 +317,7 @@ void moveWrist3ToAngle(int targetAngle) {
 // Direct pulse drive delivers 100% full motor torque to overcome
 // linkage gear mesh friction without stalling or weak creep.
 void moveGripperPositional(int targetAngle) {
-  targetAngle = constrain(targetAngle, 0, 180);
+  targetAngle = constrain(targetAngle, -25, 180);
 
   pwm.setPWM(CH_GRIPPER, 0, angleToPulse(targetAngle));
   delay(420); // Settle time for full claw stroke
@@ -726,12 +726,21 @@ void loop() {
       Serial.println(F("CLOSE_OK"));
     }
     else if (input.startsWith("SETOPEN ")) {
-      gripperOpenAngle = constrain(input.substring(8).toInt(), 0, 180);
+      gripperOpenAngle = constrain(input.substring(8).toInt(), -25, 180);
       Serial.println(F("SETOPEN_OK"));
     }
     else if (input.startsWith("SETCLOSE ")) {
-      gripperCloseAngle = constrain(input.substring(9).toInt(), 0, 180);
+      gripperCloseAngle = constrain(input.substring(9).toInt(), -25, 180);
       Serial.println(F("SETCLOSE_OK"));
+    }
+    else if (input.startsWith("PULSE 5 ")) {
+      int p = constrain(input.substring(8).toInt(), 60, 600);
+      pwm.setPWM(CH_GRIPPER, 0, p);
+      delay(420);
+      if (!gripperHoldPower) {
+        pwm.setPWM(CH_GRIPPER, 0, STOP_PULSE);
+      }
+      Serial.println(F("PULSE5_OK"));
     }
     else if (input == "GETGRIPPER") {
       Serial.print(F("GRIPPER_ANGLES OPEN="));

@@ -1,7 +1,7 @@
 """Test Closing Angles Script.
 
-Sweeps downward from 30° to 0°:
-  30° -> 20° -> 15° -> 10° -> 5° -> 0°
+Sweeps downward from 30° down through 0° into negative angles:
+  30° (half-open) -> 20° -> 10° -> 0° -> -5° -> -10° -> -15° -> -20°
 to identify the exact angle where the claw tips firmly meet.
 """
 
@@ -19,11 +19,15 @@ def free_port():
     subprocess.run(["taskkill", "/F", "/IM", "node.exe"], capture_output=True)
     time.sleep(1.5)
 
+def angle_to_pulse(ang):
+    # map(ang, 0, 180, 140, 520)
+    return int(round(140 + (ang * (520 - 140) / 180)))
+
 def main():
     free_port()
 
     print("=" * 65)
-    print(" PostureGuard - Testing Closing Angles (30° down to 0°)")
+    print(" PostureGuard - Testing Closing Angles (30° down to -20°)")
     print(f" Connecting to {PORT} ({BAUD} baud)...")
     print("=" * 65)
 
@@ -47,12 +51,13 @@ def main():
         while ser.in_waiting:
             ser.readline()
 
-    angles_to_test = [30, 20, 15, 10, 5, 0]
+    angles_to_test = [30, 20, 10, 0, -5, -10, -15, -20]
 
     for ang in angles_to_test:
-        print(f"\n>>> Moving to {ang}° (command: 5 {ang})...")
+        pulse = angle_to_pulse(ang)
+        print(f"\n>>> Moving to {ang}° [Pulse {pulse}] (command: 5 {ang})...")
         send(f"5 {ang}")
-        print(f"    --> Look at the claw tips now. Is it closed at {ang}°?")
+        print(f"    --> Look at claw tips now. Are they touching at {ang}°?")
         print(f"        (Holding position for 4 seconds...)")
         time.sleep(4.0)
 
@@ -63,7 +68,7 @@ def main():
 
     ser.close()
     print("\n" + "=" * 65)
-    print(" Test finished! Which angle (20°, 15°, 10°, 5°, or 0°) closed it best?")
+    print(" Test finished! Which angle (0°, -5°, -10°, -15°, or -20°) closed it completely?")
     print("=" * 65)
     return 0
 
