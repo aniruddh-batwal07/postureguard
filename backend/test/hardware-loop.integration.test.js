@@ -97,7 +97,7 @@ test('real session flow: create → baseline_captured → monitoring → violati
   const sessionId = created.body.session.id;
   assert.equal(created.body.session.state, 'monitoring');
   assert.equal(created.body.session.baselineState, 'unconfigured');
-  assert.deepEqual(device.sent, [], 'no hardware command on session start');
+  assert.deepEqual(device.sent, ['HOME'], 'session start brings arm to base position');
 
   // A successful baseline completion moves baselineState to configured.
   const baseline = await postEvent(app, 'baseline_captured', sessionId);
@@ -105,21 +105,21 @@ test('real session flow: create → baseline_captured → monitoring → violati
   const active = await activeSession(app);
   assert.equal(active.state, 'monitoring');
   assert.equal(active.baselineState, 'configured');
-  assert.deepEqual(device.sent, [], 'baseline completion never touches the arm');
+  assert.deepEqual(device.sent, ['HOME'], 'baseline completion never touches the arm');
 
   // Now the real loop drives the arm: violation blocks, correction unblocks.
   await postEvent(app, 'slouch_violation', sessionId);
-  assert.deepEqual(device.sent, ['BLOCK']);
+  assert.deepEqual(device.sent, ['HOME', 'BLOCK']);
   assert.equal((await activeSession(app)).state, 'blocked');
 
   await postEvent(app, 'correction_requested', sessionId);
-  assert.deepEqual(device.sent, ['BLOCK', 'RETRIEVE']);
+  assert.deepEqual(device.sent, ['HOME', 'BLOCK', 'RETRIEVE']);
   assert.equal((await activeSession(app)).state, 'monitoring');
 
   // End behavior stays correct.
   const end = await request(app).post(`/api/sessions/${sessionId}/end`).expect(200);
   assert.equal(end.body.session.state, 'ended');
-  assert.deepEqual(device.sent, ['BLOCK', 'RETRIEVE']);
+  assert.deepEqual(device.sent, ['HOME', 'BLOCK', 'RETRIEVE']);
   assert.equal(await activeSession(app), null);
 });
 

@@ -45,6 +45,20 @@ function createSessionService({ store, hardware, now = () => new Date() }) {
     if (active) {
       throw new ActiveSessionExistsError('an active session already exists');
     }
+
+    // Ensure arm is homed to base position whenever a session starts, no matter where angles were
+    if (hardware) {
+      try {
+        if (typeof hardware.home === 'function') {
+          await hardware.home();
+        } else if (typeof hardware.retrieve === 'function') {
+          await hardware.retrieve();
+        }
+      } catch (err) {
+        console.warn(`[session] failed to home arm on session start: ${err.message}`);
+      }
+    }
+
     const timestamp = now();
     const name = typeof friendlyName === 'string' && friendlyName.trim().length > 0
       ? friendlyName.trim()
@@ -227,6 +241,17 @@ function createSessionService({ store, hardware, now = () => new Date() }) {
     return current;
   }
 
+  async function homeArm() {
+    if (!hardware) return null;
+    if (typeof hardware.home === 'function') {
+      return hardware.home();
+    }
+    if (typeof hardware.retrieve === 'function') {
+      return hardware.retrieve();
+    }
+    return null;
+  }
+
   return {
     createSession,
     getActiveSession,
@@ -237,6 +262,7 @@ function createSessionService({ store, hardware, now = () => new Date() }) {
     endSession,
     blockSession,
     retrieveSession,
+    homeArm,
   };
 }
 

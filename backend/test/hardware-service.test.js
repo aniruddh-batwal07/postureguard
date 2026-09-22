@@ -222,6 +222,18 @@ test('unknown response lines are protocol violations, not successes', async () =
   await assert.rejects(pending, HardwareProtocolError);
 });
 
+test('HOME sends exactly HOME and resolves on HOME_OK', async () => {
+  const device = new FakeSerialDevice({ deferred: true });
+  const hardware = service(device);
+
+  const pending = hardware.home();
+  await flush();
+  assert.deepEqual(device.sent, ['HOME']);
+
+  device.reply('HOME_OK');
+  assert.equal(await pending, 'HOME_OK');
+});
+
 test('service refuses to be created without a transport', () => {
   assert.throws(() => createHardwareService({}), HardwareUnavailableError);
 });

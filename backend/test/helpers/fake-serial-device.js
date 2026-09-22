@@ -6,6 +6,7 @@ const DEFAULT_RESPONSES = Object.freeze({
   BLOCK: 'BLOCK_OK',
   RETRIEVE: 'RETRIEVE_OK',
   STATUS: 'STATE_DOCKED',
+  HOME: 'HOME_OK',
 });
 
 /**

@@ -71,7 +71,7 @@ export default function SessionControls({
           onClick={() => onStartSession()}
           disabled={busy || loading || active}
         >
-          {busy && !active ? 'Starting…' : 'Start Session'}
+          {busy && !active ? 'Homing Arm & Starting…' : 'Start Session'}
         </button>
         <button
           type="button"

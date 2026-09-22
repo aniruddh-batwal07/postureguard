@@ -20,12 +20,14 @@ const COMMANDS = Object.freeze({
   BLOCK: 'BLOCK',
   RETRIEVE: 'RETRIEVE',
   STATUS: 'STATUS',
+  HOME: 'HOME',
 });
 
 /** Exact acknowledgement response for each non-STATUS command. */
 const ACK_RESPONSES = Object.freeze({
   [COMMANDS.BLOCK]: 'BLOCK_OK',
   [COMMANDS.RETRIEVE]: 'RETRIEVE_OK',
+  [COMMANDS.HOME]: 'HOME_OK',
 });
 
 /** Valid STATUS responses mapped to a normalized arm state. */

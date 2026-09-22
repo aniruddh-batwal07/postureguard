@@ -358,6 +358,9 @@ void setPositionalJoint(int ch, int targetAngle) {
 
   int start = *currentAnglePtr;
   if (start == targetAngle) {
+    // Pulse servo to target angle to guarantee physical arm holds at base position even if software state already matched
+    pwm.setPWM(ch, 0, angleToPulse(targetAngle));
+    delay(150);
     pwm.setPWM(ch, 0, STOP_PULSE);
     return;
   }

@@ -110,7 +110,7 @@ async function startServer() {
       const currentStatus = await hardware.status().catch(() => ({ state: 'unknown' }));
       console.log(`[hardware] Arduino connected on ${targetPort} (status: ${currentStatus.state})`);
       // Initial homing to ensure arm is at dock/base position upon startup
-      await hardware.retrieve().catch((err) => {
+      await (typeof hardware.home === 'function' ? hardware.home() : hardware.retrieve()).catch((err) => {
         console.warn(`[hardware] initial homing on startup: ${err.message}`);
       });
     } catch (hwErr) {

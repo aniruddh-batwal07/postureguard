@@ -35,6 +35,17 @@ function createSessionsRouter(service, statisticsService = null, cvManager = nul
     }
   });
 
+  router.post('/sessions/home', async (_req, res, next) => {
+    try {
+      if (typeof service.homeArm === 'function') {
+        await service.homeArm();
+      }
+      res.json({ ok: true, status: 'docked' });
+    } catch (err) {
+      next(err);
+    }
+  });
+
   router.get('/sessions/active', async (_req, res, next) => {
     try {
       const session = await service.getActiveSession();

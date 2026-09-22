@@ -102,7 +102,11 @@ function createHardwareService({ transport, commandTimeoutMs = config.hardwareCo
     return enqueue(() => request(protocol.COMMANDS.STATUS));
   }
 
-  return { block, retrieve, status };
+  function home() {
+    return enqueue(() => request(protocol.COMMANDS.HOME));
+  }
+
+  return { block, retrieve, status, home };
 }
 
 module.exports = { createHardwareService };

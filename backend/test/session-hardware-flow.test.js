@@ -264,3 +264,30 @@ test('a failed final RETRIEVE never blocks session end', async () => {
   assert.deepEqual(device.sent, ['RETRIEVE']);
   assert.equal((await store.findBySessionId(SESSION_UUID)).state, 'ended');
 });
+
+test('createSession sends HOME to bring arm to base position', async () => {
+  const device = new FakeSerialDevice({ deferred: true });
+  const { store, sessions } = setup({ device });
+
+  const pending = sessions.createSession({ friendlyName: 'Test Homing' });
+  await flush();
+  assert.deepEqual(device.sent, ['HOME'], 'session creation triggers HOME command');
+
+  device.reply('HOME_OK');
+  const result = await pending;
+  assert.equal(result.state, 'monitoring');
+  assert.equal(result.friendlyName, 'Test Homing');
+});
+
+test('createSession still succeeds if hardware homing fails (fail-safe)', async () => {
+  const device = new FakeSerialDevice({ deferred: true });
+  const { store, sessions } = setup({ device });
+
+  const pending = sessions.createSession();
+  await flush();
+  assert.deepEqual(device.sent, ['HOME']);
+
+  device.reply('ERROR_DEVICE_DISCONNECTED');
+  const result = await pending;
+  assert.equal(result.state, 'monitoring');
+});
