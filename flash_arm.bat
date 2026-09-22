@@ -18,7 +18,7 @@ if %ERRORLEVEL% EQU 0 (
     echo.
     echo ================================================================
     echo Firmware successfully flashed!
-    echo Now verifying gripper claw (OPEN to 75 deg, CLOSE to 40 deg)...
+    echo Now verifying gripper claw (OPEN to 30 deg, CLOSE to -25 deg)...
     echo ================================================================
     python "%~dp0test_calibrated_gripper.py"
 ) else (

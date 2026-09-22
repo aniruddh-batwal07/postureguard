@@ -20,6 +20,18 @@ AVRDUDE = r"C:\Rishabh\RKDM\avrdude_x64\avrdude.exe"
 AVRCONF = r"C:\Rishabh\RKDM\avrdude_x64\avrdude.conf"
 
 def find_arduino_port():
+    # Fast path: check COM13 directly to avoid slow Windows Bluetooth COM port discovery
+    try:
+        s = serial.Serial("COM13")
+        s.close()
+        return "COM13"
+    except Exception as e:
+        err = str(e).lower()
+        if "access is denied" in err or "permission" in err or "busy" in err:
+            return "COM13"
+        # If COM13 simply failed to open because it was busy, return COM13
+        pass
+
     ports = serial.tools.list_ports.comports()
     for p in ports:
         desc = p.description.lower()
@@ -29,7 +41,7 @@ def find_arduino_port():
     for p in ports:
         if p.device.upper() == "COM13":
             return "COM13"
-    return None
+    return "COM13"
 
 port = find_arduino_port()
 if not port:

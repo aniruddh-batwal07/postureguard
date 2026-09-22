@@ -104,7 +104,7 @@ bool wrist3IsPositional = false;
 
 // Gripper Claw Settings (Channel 5 - MG90S Positional Servo)
 bool isPositional180Mode   = true;  
-bool gripperHoldPower      = false; // Cut PWM after move: prevents motor from stalling and overheating
+bool gripperHoldPower      = true;  // Active hold: keeps claw firmly clamped on cardboard until dropped
 int gripperOpenAngle       = 30;    // User calibrated: half open (~2cm gap), exactly desired max open
 int gripperCloseAngle      = -25;   // User calibrated: full flush seal clamp
 int angleCh5               = -25;   // Default closed
