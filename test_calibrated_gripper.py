@@ -1,19 +1,27 @@
 """PostureGuard Gripper Verification Script.
 
 Tests the calibrated MG90S gripper claw on Channel 5:
-- OPEN command (75°: controlled ~2cm opening, no strain on linkage)
-- CLOSE command (40°: firm clamp where claw tips meet)
+- OPEN command (30°: controlled half opening, ~2cm gap)
+- CLOSE command (-25°: firm flush clamp where claw tips tightly meet)
 - GETGRIPPER command (queries calibrated angles)
 """
 
 import time
 import sys
+import subprocess
 import serial
 
 PORT = "COM13"
 BAUD = 115200
 
+def free_port():
+    subprocess.run(["taskkill", "/F", "/FI", "WINDOWTITLE eq PostureGuard Backend*"], capture_output=True)
+    subprocess.run(["taskkill", "/F", "/IM", "node.exe"], capture_output=True)
+    time.sleep(1.0)
+
 def main():
+    free_port()
+
     print("=" * 60)
     print(" PostureGuard - Calibrated Gripper Verification")
     print(f" Connecting to {PORT} ({BAUD} baud)...")
@@ -58,21 +66,21 @@ def main():
     send("STATUS")
 
     # 2. Test gentle controlled OPEN
-    print("\n[Step 1] Opening Gripper (OPEN -> 75° gentle opening)...")
+    print("\n[Step 1] Opening Gripper (OPEN -> 30° half opening)...")
     send("OPEN")
     time.sleep(2.5)
 
     # 3. Test firm CLOSE
-    print("\n[Step 2] Closing Gripper (CLOSE -> 40° firm clamp)...")
+    print("\n[Step 2] Closing Gripper (CLOSE -> -25° full tight clamp)...")
     send("CLOSE")
     time.sleep(2.5)
 
     # 4. Cycle once more to verify repeatability
-    print("\n[Step 3] Opening Gripper again (OPEN -> 75°)...")
+    print("\n[Step 3] Opening Gripper again (OPEN -> 30°)...")
     send("OPEN")
     time.sleep(2.5)
 
-    print("\n[Step 4] Closing Gripper again (CLOSE -> 40°)...")
+    print("\n[Step 4] Closing Gripper again (CLOSE -> -25°)...")
     send("CLOSE")
     time.sleep(2.0)
 

@@ -40,6 +40,12 @@ if not port:
 
 print(f"[+] Detected Arduino Uno on port: {port}")
 
+# Free COM13 if backend or node is running
+print(f"Ensuring {port} is free...")
+subprocess.run(["taskkill", "/F", "/FI", "WINDOWTITLE eq PostureGuard Backend*"], capture_output=True)
+subprocess.run(["taskkill", "/F", "/IM", "node.exe"], capture_output=True)
+time.sleep(1.0)
+
 # Test port access
 print(f"Checking access to {port}...")
 accessible = False
