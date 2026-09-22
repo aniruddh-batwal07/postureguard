@@ -124,7 +124,7 @@ def main():
     send_cmd(f"5 {current_ang}")
 
     saved_open = 30
-    saved_close = -10
+    saved_close = -25
 
     print("\n" + "=" * 65)
     print(" Controls (Claw Closing Range: -25° to 35°):")

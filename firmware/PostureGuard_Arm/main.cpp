@@ -106,8 +106,8 @@ bool wrist3IsPositional = false;
 bool isPositional180Mode   = true;  
 bool gripperHoldPower      = false; // Cut PWM after move: prevents motor from stalling and overheating
 int gripperOpenAngle       = 30;    // User calibrated: half open (~2cm gap), exactly desired max open
-int gripperCloseAngle      = -10;   // Calibrated clamp angle (sub-zero allows claw tips to meet tightly)
-int angleCh5               = -10;   // Default closed
+int gripperCloseAngle      = -25;   // User calibrated: full flush seal clamp
+int angleCh5               = -25;   // Default closed
 bool gripperIsOpen         = false;
 
 // Arm Operational States per docs/architecture.md §4.3
@@ -691,7 +691,7 @@ void setup() {
   currentArmState = STATE_DOCKED;
   persistState();
 
-  Serial.println(F("PostureGuard Firmware v1.6 Ready (Calibrated Gripper 75/40, Zero-Rebound Base)."));
+  Serial.println(F("PostureGuard Firmware v1.7 Ready (Calibrated Gripper 30/-25, Zero-Rebound Base)."));
 }
 
 void loop() {
