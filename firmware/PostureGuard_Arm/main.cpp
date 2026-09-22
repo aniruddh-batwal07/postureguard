@@ -105,9 +105,9 @@ bool wrist3IsPositional = false;
 // Gripper Claw Settings (Channel 5 - MG90S Positional Servo)
 bool isPositional180Mode   = true;  
 bool gripperHoldPower      = false; // Cut PWM after move: prevents motor from stalling and overheating
-int gripperOpenAngle       = 115;   // Safe open angle: avoids mechanical linkage toggle-lock
-int gripperCloseAngle      = 80;    // Calibrated gentle clamp angle
-int angleCh5               = 80;    // Default closed
+int gripperOpenAngle       = 75;    // Calibrated gentle open angle (~2cm gap; avoids over-opening & linkage strain)
+int gripperCloseAngle      = 40;    // Calibrated clamp angle (claw tips firmly meet)
+int angleCh5               = 40;    // Default closed
 bool gripperIsOpen         = false;
 
 // Arm Operational States per docs/architecture.md §4.3
@@ -320,7 +320,7 @@ void moveGripperPositional(int targetAngle) {
   targetAngle = constrain(targetAngle, 10, 170);
 
   pwm.setPWM(CH_GRIPPER, 0, angleToPulse(targetAngle));
-  delay(350); // Settle time for full claw stroke
+  delay(420); // Settle time for full claw stroke
 
   if (!gripperHoldPower) {
     pwm.setPWM(CH_GRIPPER, 0, STOP_PULSE);
@@ -358,6 +358,9 @@ void setPositionalJoint(int ch, int targetAngle) {
 
   int start = *currentAnglePtr;
   if (start == targetAngle) {
+    // Pulse servo to target angle to guarantee physical arm holds at base position even if software state already matched
+    pwm.setPWM(ch, 0, angleToPulse(targetAngle));
+    delay(150);
     pwm.setPWM(ch, 0, STOP_PULSE);
     return;
   }
@@ -688,7 +691,7 @@ void setup() {
   currentArmState = STATE_DOCKED;
   persistState();
 
-  Serial.println(F("PostureGuard Firmware v1.5 Ready (Full-Torque Gripper Active-Hold, Zero-Rebound Base)."));
+  Serial.println(F("PostureGuard Firmware v1.6 Ready (Calibrated Gripper 75/40, Zero-Rebound Base)."));
 }
 
 void loop() {
@@ -729,6 +732,12 @@ void loop() {
     else if (input.startsWith("SETCLOSE ")) {
       gripperCloseAngle = constrain(input.substring(9).toInt(), 10, 170);
       Serial.println(F("SETCLOSE_OK"));
+    }
+    else if (input == "GETGRIPPER") {
+      Serial.print(F("GRIPPER_ANGLES OPEN="));
+      Serial.print(gripperOpenAngle);
+      Serial.print(F(" CLOSE="));
+      Serial.println(gripperCloseAngle);
     }
     else if (input.startsWith("HOLD 5 ") || input.startsWith("SETHOLD 5 ")) {
       int h = input.substring(input.lastIndexOf(' ') + 1).toInt();
