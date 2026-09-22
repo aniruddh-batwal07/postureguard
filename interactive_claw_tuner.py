@@ -144,7 +144,7 @@ def main():
             c_str = f" [CLOSE={saved_close}°]" if saved_close is not None else " [CLOSE not set]"
             o_str = f" [OPEN={saved_open}°]" if saved_open is not None else " [OPEN not set]"
             cur_p = angle_to_pulse(current_ang)
-            prompt = f"\n[Angle: {current_ang}°, Pulse: {cur_p}]{o_str}{c_str}\nEnter command (-, +, angle -25 to 35, p <pulse>, c, o, t, s, q): "
+            prompt = f"\n[Angle: {current_ang}°, Pulse: {cur_p}]{o_str}{c_str}\nEnter command (-, +, angle -45 to 35, p <pulse>, c, o, t, s, q): "
             user_in = input(prompt).strip().lower()
 
             if not user_in or user_in == 'q':
@@ -155,7 +155,7 @@ def main():
                 print(f"--> Moving to {current_ang}° (Pulse {cur_p})")
                 send_cmd(f"5 {current_ang}")
             elif user_in in ['-', 'd']:
-                current_ang = max(-25, current_ang - 2)
+                current_ang = max(-45, current_ang - 2)
                 cur_p = angle_to_pulse(current_ang)
                 print(f"--> Closing to {current_ang}° (Pulse {cur_p})")
                 send_cmd(f"5 {current_ang}")
@@ -172,13 +172,13 @@ def main():
                     print("Invalid pulse value.")
             elif user_in.replace('-', '', 1).isdigit():
                 val = int(user_in)
-                if -25 <= val <= 35:
+                if -45 <= val <= 35:
                     current_ang = val
                     cur_p = angle_to_pulse(current_ang)
                     print(f"--> Moving to {current_ang}° (Pulse {cur_p})")
                     send_cmd(f"5 {current_ang}")
                 else:
-                    print("Please enter an angle between -25° and 35° to protect the linkage.")
+                    print("Please enter an angle between -45° and 35° to protect the linkage.")
             elif user_in == 'c':
                 saved_close = current_ang
                 print(f"[+] Saved CLOSE angle = {saved_close}° (Pulse {angle_to_pulse(saved_close)})")

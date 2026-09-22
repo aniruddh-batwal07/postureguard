@@ -173,7 +173,7 @@ bool restoreState() {
   angleCh2             = constrain(s.ch2, 0, 180);
   wrist3Angle          = constrain(s.ch3, 0, 180);
   angleCh4             = constrain(s.ch4, 0, 180);
-  angleCh5             = constrain((int)s.ch5, -25, 180);
+  angleCh5             = constrain((int)s.ch5, -45, 180);
   gripperIsOpen        = (angleCh5 >= gripperOpenAngle);
   return true;
 }
@@ -200,7 +200,7 @@ void executeRetrieve();
 void printStatus();
 
 int angleToPulse(int ang) {
-  ang = constrain(ang, -25, 180);
+  ang = constrain(ang, -45, 180);
   return map(ang, 0, 180, SERVOMIN, SERVOMAX);
 }
 
@@ -317,7 +317,7 @@ void moveWrist3ToAngle(int targetAngle) {
 // Direct pulse drive delivers 100% full motor torque to overcome
 // linkage gear mesh friction without stalling or weak creep.
 void moveGripperPositional(int targetAngle) {
-  targetAngle = constrain(targetAngle, -25, 180);
+  targetAngle = constrain(targetAngle, -45, 180);
 
   pwm.setPWM(CH_GRIPPER, 0, angleToPulse(targetAngle));
   delay(420); // Settle time for full claw stroke
@@ -726,11 +726,11 @@ void loop() {
       Serial.println(F("CLOSE_OK"));
     }
     else if (input.startsWith("SETOPEN ")) {
-      gripperOpenAngle = constrain(input.substring(8).toInt(), -25, 180);
+      gripperOpenAngle = constrain(input.substring(8).toInt(), -45, 180);
       Serial.println(F("SETOPEN_OK"));
     }
     else if (input.startsWith("SETCLOSE ")) {
-      gripperCloseAngle = constrain(input.substring(9).toInt(), -25, 180);
+      gripperCloseAngle = constrain(input.substring(9).toInt(), -45, 180);
       Serial.println(F("SETCLOSE_OK"));
     }
     else if (input.startsWith("PULSE 5 ")) {

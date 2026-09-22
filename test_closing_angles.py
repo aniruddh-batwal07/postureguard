@@ -1,7 +1,7 @@
 """Test Closing Angles Script.
 
-Sweeps downward from 30° down through 0° into negative angles:
-  30° (half-open) -> 20° -> 10° -> 0° -> -5° -> -10° -> -15° -> -20°
+Sweeps downward focusing on the sub-zero closing range:
+  30° (half-open) -> 0° -> -15° -> -20° -> -25° -> -30° -> -35°
 to identify the exact angle where the claw tips firmly meet.
 """
 
@@ -27,7 +27,7 @@ def main():
     free_port()
 
     print("=" * 65)
-    print(" PostureGuard - Testing Closing Angles (30° down to -20°)")
+    print(" PostureGuard - Testing Deep Closing Angles (-20°, -25°, -30°)")
     print(f" Connecting to {PORT} ({BAUD} baud)...")
     print("=" * 65)
 
@@ -51,15 +51,15 @@ def main():
         while ser.in_waiting:
             ser.readline()
 
-    angles_to_test = [30, 20, 10, 0, -5, -10, -15, -20]
+    angles_to_test = [30, 0, -15, -20, -25, -30, -35]
 
     for ang in angles_to_test:
         pulse = angle_to_pulse(ang)
         print(f"\n>>> Moving to {ang}° [Pulse {pulse}] (command: 5 {ang})...")
         send(f"5 {ang}")
-        print(f"    --> Look at claw tips now. Are they touching at {ang}°?")
-        print(f"        (Holding position for 4 seconds...)")
-        time.sleep(4.0)
+        print(f"    --> Look at claw tips now. Are they completely closed at {ang}°?")
+        print(f"        (Holding position for 4.5 seconds...)")
+        time.sleep(4.5)
 
     # Return to 30 (user's preferred half-open)
     print("\n>>> Returning to 30° (half-open)...")
@@ -68,7 +68,7 @@ def main():
 
     ser.close()
     print("\n" + "=" * 65)
-    print(" Test finished! Which angle (0°, -5°, -10°, -15°, or -20°) closed it completely?")
+    print(" Test finished! Between -20°, -25°, and -30°, which angle achieved the full seal?")
     print("=" * 65)
     return 0
 
